@@ -1,0 +1,8 @@
+Name: @PROJECT_NAME@
+Description: @PROJECT_BRIEF@
+Version: @PROJECT_VERSION@
+prefix=@CMAKE_INSTALL_PREFIX@
+includedir=${prefix}/include
+libdir=${prefix}/lib
+Libs: -L${libdir} -L@IOTSDK_LIB_PATH@ @PKG_CONFIG_LIBS@
+Cflags: -I${includedir}/aiaconfig -I@IOTSDK_SOURCE_DIR@/demos -I@IOTSDK_SOURCE_DIR@/libraries/aws/common/include -I${includedir} -I@IOTSDK_SOURCE_DIR@/ports/common/include -I@IOTSDK_SOURCE_DIR@/libraries -I@IOTSDK_SOURCE_DIR@/libraries/standard/common/include -I@IOTSDK_SOURCE_DIR@/libraries/standard/mqtt/include -I@IOTSDK_SOURCE_DIR@/libraries/platform -DIOT_SYSTEM_TYPES_FILE="<@IOTSDK_SYSTEM_TYPES_FILE@>" @PKG_CONFIG_CFLAGS@

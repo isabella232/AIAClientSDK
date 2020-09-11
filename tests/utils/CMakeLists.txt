@@ -1,0 +1,6 @@
+add_subdirectory(source/aiatestutilities)
+add_subdirectory(source/aiamockconnectionmanager)
+add_subdirectory(source/aiamockregulator)
+add_subdirectory(source/aiamocksequencer)
+add_subdirectory(source/aiamocksecretmanager)
+add_subdirectory(source/aiamockspeakermanager)

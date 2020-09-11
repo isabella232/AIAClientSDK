@@ -1,0 +1,1962 @@
+Revert "Remove macOS and Windows ports. (#604)"
+
+From: Ken Cecka <kcecka@amazon.com>
+
+This reverts commit 5bdb3fd6142f5b2482ee01b255fa264c95ef34d4.
+---
+ .gitignore                                     |    3 
+ .travis.yml                                    |   12 +
+ CMakeLists.txt                                 |   21 +
+ README.md                                      |    8 
+ doc/guide/building.txt                         |    8 
+ doc/guide/developer/porting.txt                |    2 
+ ports/README.md                                |    2 
+ ports/macos/include/iot_platform_types_macos.h |   77 ++++
+ ports/macos/macos.cmake                        |   49 ++
+ ports/macos/src/iot_clock_macos.c              |  248 +++++++++++++
+ ports/macos/src/iot_threads_macos.c            |  475 ++++++++++++++++++++++++
+ ports/win32/include/iot_platform_types_win32.h |   71 ++++
+ ports/win32/src/iot_clock_win32.c              |  251 +++++++++++++
+ ports/win32/src/iot_threads_win32.c            |  391 ++++++++++++++++++++
+ ports/win32/win32.cmake                        |   17 +
+ scripts/ci_test_build.sh                       |   22 +
+ scripts/ci_test_mqtt.sh                        |   32 +-
+ scripts/setup/ci_setup_osx.sh                  |    6 
+ scripts/setup/ci_setup_windows.sh              |   10 +
+ 19 files changed, 1689 insertions(+), 16 deletions(-)
+ create mode 100644 ports/macos/include/iot_platform_types_macos.h
+ create mode 100644 ports/macos/macos.cmake
+ create mode 100644 ports/macos/src/iot_clock_macos.c
+ create mode 100644 ports/macos/src/iot_threads_macos.c
+ create mode 100644 ports/win32/include/iot_platform_types_win32.h
+ create mode 100644 ports/win32/src/iot_clock_win32.c
+ create mode 100644 ports/win32/src/iot_threads_win32.c
+ create mode 100644 ports/win32/win32.cmake
+ create mode 100644 scripts/setup/ci_setup_osx.sh
+ create mode 100644 scripts/setup/ci_setup_windows.sh
+
+diff --git a/.gitignore b/.gitignore
+index 3ca54d3..9bf6048 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -4,3 +4,6 @@ doc/tag/*
+ 
+ # Ignore CMake build directory.
+ build/
++
++# Ignore macOS metadata files.
++.DS_Store
+diff --git a/.travis.yml b/.travis.yml
+index 988f314..ab92daf 100644
+--- a/.travis.yml
++++ b/.travis.yml
+@@ -18,6 +18,13 @@ jobs:
+     # Build checks for pull requests.
+     - if: type = pull_request
+       env: RUN_TEST=build
++    - if: type = pull_request
++      env: RUN_TEST=build
++      os: osx
++    - if: type = pull_request
++      env: RUN_TEST=build
++      os: windows
++      compiler: msvc
+     # Documentation check for pull requests.
+     - if: type = pull_request
+       env: RUN_TEST=doc
+@@ -30,6 +37,11 @@ jobs:
+     - if: type = push
+       compiler: gcc
+       env: RUN_TEST=coverage
++    - os: osx
++      env: RUN_TEST=mqtt NETWORK_STACK=mbedtls
++    - os: windows
++      env: RUN_TEST=mqtt NETWORK_STACK=mbedtls
++      compiler: msvc
+ 
+ # Install dependencies.
+ install:
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 630d7d8..961b1fe 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -28,7 +28,12 @@ option( IOT_BUILD_CLONE_SUBMODULES
+         ON )
+ 
+ # Unity test framework does not export the correct symbols for DLLs.
+-set( ALLOW_SHARED_LIBRARIES ON )
++# Do not allow allow shared libraries to be built when building tests on Windows.
++if( ${IOT_BUILD_TESTS} AND ${CMAKE_SYSTEM_NAME} STREQUAL "Windows" )
++    set( ALLOW_SHARED_LIBRARIES OFF )
++else()
++    set( ALLOW_SHARED_LIBRARIES ON )
++endif()
+ 
+ include( CMakeDependentOption )
+ CMAKE_DEPENDENT_OPTION( BUILD_SHARED_LIBS
+@@ -45,8 +50,18 @@ if( NOT DEFINED IOT_PLATFORM_NAME )
+         option( IOT_NETWORK_USE_OPENSSL
+                 "Set this to ON to use a network abstraction implemented on OpenSSL. When OFF, the mbed TLS network abstraction is used."
+                 OFF )
+-    else()
+-        message( FATAL_ERROR "${CMAKE_SYSTEM_NAME} is not a supported platform." )
++    elseif( ${CMAKE_SYSTEM_NAME} STREQUAL "Windows" )
++        set( IOT_PLATFORM_NAME "win32" CACHE STRING "Port to use for building the SDK." )
++
++        # Export all symbols when building Windows DLLs.
++        if( ${BUILD_SHARED_LIBS} )
++            set( CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS
++                 TRUE CACHE BOOL
++                 "Export all symbols for Windows DLLs. This option must by enabled."
++                 FORCE )
++        endif()
++    elseif( ${CMAKE_SYSTEM_NAME} STREQUAL "Darwin" )
++        set( IOT_PLATFORM_NAME "macos" CACHE STRING "Port to use for building the SDK." )
+     endif()
+ endif()
+ 
+diff --git a/README.md b/README.md
+index ffbdb51..a6563cf 100644
+--- a/README.md
++++ b/README.md
+@@ -29,13 +29,15 @@ Compared to the AWS IoT Device SDK Embedded C v3.0.1, the following features wer
+ 
+ **Main documentation page:** [Building the SDK](https://docs.aws.amazon.com/freertos/latest/lib-ref/c-sdk/main/building.html)
+ 
+-This SDK builds with [CMake](https://cmake.org/), a cross-platform build tool. This repo contains a ready-to-use port for Linux.
++This SDK builds with [CMake](https://cmake.org/), a cross-platform build tool. This repo contains ready-to-use ports for Windows, macOS, and Linux.
+ 
+ ### Prerequisites
+ - CMake 3.5.0 or later and a C99 compiler.
+ - A supported operating system. The ports provided with this repo are expected to work with all recent versions of the following operating systems, although we cannot guarantee the behavior on all systems. For reference, the version used by this repo's Travis CI builds are listed in parentheses.
+     - Linux system with POSIX thread and timer APIs. (CI tests on Ubuntu 16.04).<br>
+     On Linux systems, the OpenSSL network implementation may be used instead of the default network implementation based on mbed TLS. This requires the installation of OpenSSL development libraries and header files, version 1.0.2g or later. The OpenSSL development libraries are usually called something like `libssl-dev` or `openssl-devel` when installed through a package manager.
++    - macOS system with POSIX thread APIs and Grand Central Dispatch. (CI tests on macOS 10.13).
++    - Windows system with the Windows 10 SDK and MSVC toolchain. (CI tests on Windows Server 1803 with Visual Studio 2017).
+ 
+ ### Build Steps
+ 1. Clone the source code and submodules. This SDK uses third-party libraries as submodules in the `third_party` directory.
+@@ -67,7 +69,9 @@ This SDK builds with [CMake](https://cmake.org/), a cross-platform build tool. T
+     ```sh
+     cmake ..
+     ```
+-    CMake will generate a project based on the detected operating system. On Linux, the default project is a Makefile. To build the SDK with this Makefile, run `make`. The resulting binaries (the demo executables) and libraries will be placed in the `build/output` directory.
++    CMake will generate a project based on the detected operating system. On Linux and macOS, the default project is a Makefile. To build the SDK with this Makefile, run `make`. The resulting binaries (the demo executables) and libraries will be placed in the `build/output` directory.
++
++    On Windows, CMake will create a Visual Studio solution. Open this solution in Visual Studio to build it.
+ 
+     You may also use CMake GUI. Specify the SDK's root directory as the source directory and the build directory created in step 4 as the build directory in CMake GUI.
+ 
+diff --git a/doc/guide/building.txt b/doc/guide/building.txt
+index 7e2e8ea..45ce44b 100644
+--- a/doc/guide/building.txt
++++ b/doc/guide/building.txt
+@@ -11,6 +11,8 @@ This SDK builds with [CMake](https://cmake.org/), a cross-platform build tool.
+ - A supported operating system. The ports provided with this repo are expected to work with all recent versions of the following operating systems, although we cannot guarantee the behavior on all systems. For reference, the version used by this repo's Travis CI builds are listed in parentheses.
+     - Linux system with POSIX thread and timer APIs. (CI tests on Ubuntu 16.04).<br>
+     On Linux systems, the OpenSSL network implementation may be used instead of the default network implementation based on mbed TLS. This requires the installation of OpenSSL development libraries and header files, version 1.0.2g or later. The OpenSSL development libraries are usually called something like `libssl-dev` or `openssl-devel` when installed through a package manager.
++    - macOS system with POSIX thread APIs and Grand Central Dispatch. (CI tests on macOS 10.13).
++    - Windows system with the Windows 10 SDK and MSVC toolchain. (CI tests on Windows Server 1803 with Visual Studio 2017).
+ 
+ This SDK uses third-party libraries as Git submodules in the `third_party` directory. If the source code was downloaded via `git clone`, nothing further needs to be done. The CMake build system can automatically clone submodules in this case. However, for any other download, the submodules must be downloaded and placed in their respective `third_party` directory.
+ - [mbed TLS](https://github.com/ARMmbed/mbedtls/tree/mbedtls-2.17) → `third_party/mbedtls/mbedtls`
+@@ -46,7 +48,7 @@ Before building the demos, all desired configuration settings should be defined.
+ @subsection building_demo_commmandline Command-line build
+ @brief How to build the demo applications on the command-line.
+ 
+-In-source CMake builds are not allowed. A build directory should be created under the SDK root directory. Since CMake is cross-platform, build steps will vary depending on host OS. On Linux, the demo applications are built as follows:
++In-source CMake builds are not allowed. A build directory should be created under the SDK root directory. Since CMake is cross-platform, build steps will vary depending on host OS. On Linux and macOS, the demo applications are built as follows:
+ @code{sh}
+ # Create build directory and change to build directory.
+ mkdir build
+@@ -79,6 +81,10 @@ Delete the build directory to remove all demo application executables and build
+ 
+ Alternatively, CMake GUI may be used instead of the command line. Specify the SDK's root directory in <b>Where is the source code</b> and a build directory in <b>Where to build the binaries</b>. Click <b>Configure</b>, then <b>Generate</b>. You may modify @ref building_configuration in the CMake GUI window.
+ 
++The screenshot below is from CMake GUI on Windows. Similar options appear when using other systems.
++
++@image html cmake_build.png
++
+ @section demo_commandlineoptions Demo command line options
+ @brief Command line options of the demo applications.
+ 
+diff --git a/doc/guide/developer/porting.txt b/doc/guide/developer/porting.txt
+index 02fc2aa..54d723d 100644
+--- a/doc/guide/developer/porting.txt
++++ b/doc/guide/developer/porting.txt
+@@ -64,7 +64,7 @@ As relative paths from the SDK's root directory:
+           Port sources that are not specific to a single port, such as the network implementations.
+     - <b style="color:#ff0000">`template` <br>
+       Empty port sources containing stubbed-out functions. The files in this directory may be used as a starting point for a new port.</b>
+-    - <b style="color:#ff0000">`posix, ...` <br>
++    - <b style="color:#ff0000">`macos, posix, win32, ...` <br>
+       Port sources and headers for a single implementation. The directory is named after the target OS.</b>
+ - `tests/` <br>
+   SDK test config file and test runner source. Individual library tests are in each library directory. When building tests, @ref IOT_BUILD_TESTS should be set to `1` globally.
+diff --git a/ports/README.md b/ports/README.md
+index f085a37..ffb22cf 100644
+--- a/ports/README.md
++++ b/ports/README.md
+@@ -13,7 +13,7 @@ Its subdirectories are organized as follows:
+     Port sources that are not specific to a single port, such as the network implementations.
+ - `template` <br>
+   Empty port sources containing stubbed-out functions. The files in this directory may be used as a starting point for a new port.
+-- `posix` <br>
++- `posix`, `macos`, `win32` <br>
+   Port sources and headers for a single implementation. The directory is named after the target OS.
+ 
+ See [Porting guide](https://docs.aws.amazon.com/freertos/latest/lib-ref/c-sdk/main/guide_developer_porting.html) for instructions on how to create a new port.
+diff --git a/ports/macos/include/iot_platform_types_macos.h b/ports/macos/include/iot_platform_types_macos.h
+new file mode 100644
+index 0000000..5dd7acd
+--- /dev/null
++++ b/ports/macos/include/iot_platform_types_macos.h
+@@ -0,0 +1,77 @@
++/*
++ * Copyright (C) 2019 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy of
++ * this software and associated documentation files (the "Software"), to deal in
++ * the Software without restriction, including without limitation the rights to
++ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++ * the Software, and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++/**
++ * @file iot_platform_types_macos.h
++ * @brief Definitions of platform layer types on macOS systems.
++ */
++
++#ifndef IOT_PLATFORM_TYPES_MACOS_H_
++#define IOT_PLATFORM_TYPES_MACOS_H_
++
++/* POSIX includes that are available on macOS. */
++#ifdef POSIX_TYPES_HEADER
++    #include POSIX_TYPES_HEADER
++#else
++    #include <sys/types.h>
++#endif
++
++/* Grand Central Dispatch include. */
++#include <dispatch/dispatch.h>
++
++/* Dispatch blocks API include. */
++#include <Block.h>
++
++/**
++ * @brief The native mutex type on macOS systems.
++ *
++ * macOS provides POSIX mutexes.
++ */
++typedef pthread_mutex_t _IotSystemMutex_t;
++
++/**
++ * @brief The native semaphore type on macOS systems.
++ *
++ * macOS provides a partial implementation of POSIX semaphores, but it does not
++ * provide all of the functions needed by this SDK. Grand Central Dispatch
++ * semaphores are used instead.
++ */
++typedef struct _IotSystemSemaphore
++{
++    uint32_t count;                 /**< @brief The current count of the semaphore. */
++    dispatch_semaphore_t semaphore; /**< @brief Grand Central Dispatch semaphore. */
++} _IotSystemSemaphore_t;
++
++/**
++ * @brief The native timer type on macOS systems.
++ *
++ * POSIX timers are not available on macOS, so a timer implementation based on
++ * Grand Central Dispatch is used instead.
++ */
++typedef struct _IotSystemTimer
++{
++    dispatch_block_t dispatchBlock;     /**< @brief A dispatch block that executes for the timer. */
++    uint32_t periodMs;                  /**< @brief Expiration period of this timer, if any. */
++    void * pArgument;                   /**< @brief First argument to threadRoutine. */
++    void ( * threadRoutine )( void * ); /**< @brief Thread function to run on timer expiration. */
++} _IotSystemTimer_t;
++
++#endif /* ifndef IOT_PLATFORM_TYPES_MACOS_H_ */
+diff --git a/ports/macos/macos.cmake b/ports/macos/macos.cmake
+new file mode 100644
+index 0000000..4748c74
+--- /dev/null
++++ b/ports/macos/macos.cmake
+@@ -0,0 +1,49 @@
++# Check for POSIX threads.
++find_package( Threads REQUIRED )
++
++if( NOT ${CMAKE_USE_PTHREADS_INIT} )
++    message( FATAL_ERROR "POSIX threads required." )
++endif()
++
++# Choose either OpenSSL or mbed TLS.
++if( ${IOT_NETWORK_USE_OPENSSL} )
++    # Check for OpenSSL.
++    find_package( OpenSSL )
++
++    # Minimum supported OpenSSL version is 1.0.2g.
++    if( ${OPENSSL_FOUND} )
++        if( ${OPENSSL_VERSION} STRLESS "1.0.2g" )
++            message( FATAL_ERROR "OpenSSL 1.0.2g or later required, found ${OPENSSL_VERSION}." )
++        endif()
++
++        # Choose OpenSSL network source file.
++        set( NETWORK_HEADER ${PORTS_DIRECTORY}/common/include/iot_network_openssl.h )
++        set( NETWORK_SOURCE_FILE ${PORTS_DIRECTORY}/common/src/iot_network_openssl.c )
++
++        # Link OpenSSL.
++        set( PLATFORM_DEPENDENCIES OpenSSL::SSL OpenSSL::Crypto )
++    endif()
++else()
++    set( NETWORK_HEADER ${PORTS_DIRECTORY}/common/include/iot_network_mbedtls.h )
++    set( NETWORK_SOURCE_FILE ${PORTS_DIRECTORY}/common/src/iot_network_mbedtls.c )
++    set( PLATFORM_DEPENDENCIES mbedtls )
++    set( MBEDTLS_REQUIRED TRUE PARENT_SCOPE )
++endif()
++
++# Add the network header for this platform.
++list( APPEND PLATFORM_COMMON_HEADERS
++     ${NETWORK_HEADER} )
++
++# Platform library source files.
++set( PLATFORM_SOURCES
++     ${PORTS_DIRECTORY}/${IOT_PLATFORM_NAME}/src/iot_clock_${IOT_PLATFORM_NAME}.c
++     ${PORTS_DIRECTORY}/${IOT_PLATFORM_NAME}/src/iot_threads_${IOT_PLATFORM_NAME}.c
++     ${PORTS_DIRECTORY}/common/src/iot_network_metrics.c
++     ${NETWORK_SOURCE_FILE} )
++
++# Set the types header for this port.
++set( PORT_TYPES_HEADER ${PORTS_DIRECTORY}/${IOT_PLATFORM_NAME}/include/iot_platform_types_${IOT_PLATFORM_NAME}.h )
++
++# Set the dependencies required by this port.
++# On macOS, mbed TLS and POSIX threads are used.
++set( PLATFORM_DEPENDENCIES mbedtls Threads::Threads )
+diff --git a/ports/macos/src/iot_clock_macos.c b/ports/macos/src/iot_clock_macos.c
+new file mode 100644
+index 0000000..6c05cba
+--- /dev/null
++++ b/ports/macos/src/iot_clock_macos.c
+@@ -0,0 +1,248 @@
++/*
++ * Copyright (C) 2019 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy of
++ * this software and associated documentation files (the "Software"), to deal in
++ * the Software without restriction, including without limitation the rights to
++ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++ * the Software, and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++/**
++ * @file iot_clock_macos.c
++ * @brief Implementation of the functions in iot_clock.h for macOS.
++ */
++
++/* The config header is always included first. */
++#include "iot_config.h"
++
++/* Platform clock include. */
++#include "platform/iot_clock.h"
++
++/* Standard includes. */
++#include <stdlib.h>
++
++/* POSIX includes. Allow the default POSIX headers to be overridden. */
++#ifdef POSIX_ERRNO_HEADER
++    #include POSIX_ERRNO_HEADER
++#else
++    #include <errno.h>
++#endif
++#ifdef POSIX_TIME_HEADER
++    #include POSIX_TIME_HEADER
++#else
++    #include <time.h>
++#endif
++
++/* Configure logs for the functions in this file. */
++#ifdef IOT_LOG_LEVEL_PLATFORM
++    #define LIBRARY_LOG_LEVEL        IOT_LOG_LEVEL_PLATFORM
++#else
++    #ifdef IOT_LOG_LEVEL_GLOBAL
++        #define LIBRARY_LOG_LEVEL    IOT_LOG_LEVEL_GLOBAL
++    #else
++        #define LIBRARY_LOG_LEVEL    IOT_LOG_NONE
++    #endif
++#endif
++
++#define LIBRARY_LOG_NAME    ( "CLOCK" )
++#include "iot_logging_setup.h"
++
++/*-----------------------------------------------------------*/
++
++/**
++ * @brief The format of timestrings printed in logs.
++ *
++ * For more information on timestring formats, see [this link.]
++ * (http://pubs.opengroup.org/onlinepubs/9699919799/functions/strftime.html)
++ */
++#define TIMESTRING_FORMAT              ( "%F %R:%S" )
++
++/*
++ * Time conversion constants.
++ */
++#define NANOSECONDS_PER_MILLISECOND    ( 1000000 ) /**< @brief Nanoseconds per millisecond. */
++#define MILLISECONDS_PER_SECOND        ( 1000 )    /**< @brief Milliseconds per second. */
++
++/*-----------------------------------------------------------*/
++
++/**
++ * @brief Wraps an #IotThreadRoutine_t with a GCD-compliant one.
++ *
++ * @param[in] pArgument The value passed to `dispatch_after_f`.
++ */
++static void _timerExpirationWrapper( void * pArgument );
++
++/*-----------------------------------------------------------*/
++
++static void _timerExpirationWrapper( void * pArgument )
++{
++    IotTimer_t * pTimer = pArgument;
++
++    /* Invoke the wrapped expiration routine. */
++    pTimer->threadRoutine( pTimer->pArgument );
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotClock_GetTimestring( char * pBuffer,
++                             size_t bufferSize,
++                             size_t * pTimestringLength )
++{
++    bool status = true;
++    const time_t unixTime = time( NULL );
++    struct tm localTime = { 0 };
++    size_t timestringLength = 0;
++
++    /* localtime_r is the thread-safe variant of localtime. Its return value
++     * should be the pointer to the localTime struct. */
++    if( localtime_r( &unixTime, &localTime ) != &localTime )
++    {
++        status = false;
++    }
++
++    if( status == true )
++    {
++        /* Convert the localTime struct to a string. */
++        timestringLength = strftime( pBuffer, bufferSize, TIMESTRING_FORMAT, &localTime );
++
++        /* Check for error from strftime. */
++        if( timestringLength == 0 )
++        {
++            status = false;
++        }
++        else
++        {
++            /* Set the output parameter. */
++            *pTimestringLength = timestringLength;
++        }
++    }
++
++    return status;
++}
++
++/*-----------------------------------------------------------*/
++
++uint64_t IotClock_GetTimeMs( void )
++{
++    struct timespec currentTime = { 0 };
++
++    if( clock_gettime( CLOCK_MONOTONIC, &currentTime ) != 0 )
++    {
++        /* This block should not be reached; log an error and abort if it is. */
++        IotLogError( "Failed to read time from CLOCK_MONOTONIC. errno=%d",
++                     errno );
++
++        abort();
++    }
++
++    return ( ( uint64_t ) currentTime.tv_sec ) * MILLISECONDS_PER_SECOND +
++           ( ( uint64_t ) currentTime.tv_nsec ) / NANOSECONDS_PER_MILLISECOND;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotClock_SleepMs( uint32_t sleepTimeMs )
++{
++    /* Convert parameter to timespec. */
++    struct timespec sleepTime =
++    {
++        .tv_sec  = sleepTimeMs / MILLISECONDS_PER_SECOND,
++        .tv_nsec = ( sleepTimeMs % MILLISECONDS_PER_SECOND ) * NANOSECONDS_PER_MILLISECOND
++    };
++
++    if( nanosleep( &sleepTime, NULL ) == -1 )
++    {
++        /* This block should not be reached; log an error and abort if it is. */
++        IotLogError( "Sleep failed. errno=%d.", errno );
++
++        abort();
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotClock_TimerCreate( IotTimer_t * pNewTimer,
++                           IotThreadRoutine_t expirationRoutine,
++                           void * pArgument )
++{
++    pNewTimer->dispatchBlock = NULL;
++
++    /* Save the expiration routine and argument for use later. */
++    pNewTimer->pArgument = pArgument;
++    pNewTimer->threadRoutine = expirationRoutine;
++
++    return true;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotClock_TimerDestroy( IotTimer_t * pTimer )
++{
++    /* Cancel any timer work that may already be scheduled. */
++    if( pTimer->dispatchBlock != NULL )
++    {
++        dispatch_block_cancel( pTimer->dispatchBlock );
++
++        /* Block_release only needs to be called if ARC is not being used. */
++        #if( OS_OBJECT_HAVE_OBJC_SUPPORT == 0 )
++            Block_release( pTimer->dispatchBlock );
++        #endif
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotClock_TimerArm( IotTimer_t * pTimer,
++                        uint32_t relativeTimeoutMs,
++                        uint32_t periodMs )
++{
++    bool status = true;
++
++    /* Get the handle to a global concurrent queue. Work will be submitted to
++     * this queue. */
++    dispatch_queue_t globalDispatchQueue = dispatch_get_global_queue( QOS_CLASS_DEFAULT, 0 );
++
++    /* Calculate when the timer should first expire. */
++    int64_t delta = ( int64_t ) relativeTimeoutMs * NANOSECONDS_PER_MILLISECOND;
++    dispatch_time_t timeout = dispatch_time( DISPATCH_TIME_NOW, delta );
++
++    /* Save the period. */
++    pTimer->periodMs = periodMs;
++
++    /* Cancel any timer work that may already be scheduled (in case this call
++     * is a reschedule of an existing timer). */
++    IotClock_TimerDestroy( pTimer );
++
++    /* Create a dispatch block to execute work on behalf of the timer. */
++    pTimer->dispatchBlock = dispatch_block_create( 0, ^ {
++        _timerExpirationWrapper( pTimer );
++    } );
++
++    if( pTimer->dispatchBlock == NULL )
++    {
++        IotLogError( "Failed to create timer dispatch block." );
++
++        status = false;
++    }
++    else
++    {
++        /* Schedule the timer expiration to run at the timeout. */
++        dispatch_after( timeout, globalDispatchQueue, pTimer->dispatchBlock );
++    }
++
++    return status;
++}
++
++/*-----------------------------------------------------------*/
+diff --git a/ports/macos/src/iot_threads_macos.c b/ports/macos/src/iot_threads_macos.c
+new file mode 100644
+index 0000000..7096e0c
+--- /dev/null
++++ b/ports/macos/src/iot_threads_macos.c
+@@ -0,0 +1,475 @@
++/*
++ * Copyright (C) 2019 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy of
++ * this software and associated documentation files (the "Software"), to deal in
++ * the Software without restriction, including without limitation the rights to
++ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++ * the Software, and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++/**
++ * @file iot_threads_macos.c
++ * @brief Implementation of the functions in iot_threads.h for macOS.
++ */
++
++/* The config header is always included first. */
++#include "iot_config.h"
++
++/* Platform threads include. */
++#include "platform/iot_threads.h"
++
++/* Error handling include. */
++#include "iot_error.h"
++
++/* Atomic include. */
++#include "iot_atomic.h"
++
++/* POSIX includes. Allow the default POSIX headers to be overridden. */
++#ifdef POSIX_ERRNO_HEADER
++    #include POSIX_ERRNO_HEADER
++#else
++    #include <errno.h>
++#endif
++#ifdef POSIX_PTHREAD_HEADER
++    #include POSIX_PTHREAD_HEADER
++#else
++    #include <pthread.h>
++#endif
++
++/* Configure logs for the functions in this file. */
++#ifdef IOT_LOG_LEVEL_PLATFORM
++    #define LIBRARY_LOG_LEVEL        IOT_LOG_LEVEL_PLATFORM
++#else
++    #ifdef IOT_LOG_LEVEL_GLOBAL
++        #define LIBRARY_LOG_LEVEL    IOT_LOG_LEVEL_GLOBAL
++    #else
++        #define LIBRARY_LOG_LEVEL    IOT_LOG_NONE
++    #endif
++#endif
++
++#define LIBRARY_LOG_NAME    ( "THREAD" )
++#include "iot_logging_setup.h"
++
++/*
++ * Provide default values for undefined memory allocation functions.
++ */
++#ifndef IotThreads_Malloc
++    #include <stdlib.h>
++
++/**
++ * @brief Memory allocation. This function should have the same signature
++ * as [malloc](http://pubs.opengroup.org/onlinepubs/9699919799/functions/malloc.html).
++ */
++    #define IotThreads_Malloc    malloc
++#endif
++#ifndef IotThreads_Free
++    #include <stdlib.h>
++
++/**
++ * @brief Free memory. This function should have the same signature as
++ * [free](http://pubs.opengroup.org/onlinepubs/9699919799/functions/free.html).
++ */
++    #define IotThreads_Free    free
++#endif
++
++/*-----------------------------------------------------------*/
++
++/**
++ * @brief Holds information about an active detached thread.
++ */
++typedef struct _threadInfo
++{
++    void * pArgument;                 /**< @brief First argument to `threadRoutine`. */
++    IotThreadRoutine_t threadRoutine; /**< @brief Thread function to run. */
++} _threadInfo_t;
++
++/*-----------------------------------------------------------*/
++
++/**
++ * @brief Wraps an #IotThreadRoutine_t with a POSIX-compliant one.
++ *
++ * @param[in] pArgument The value passed as `arg` to `pthread_create`.
++ *
++ * @return Always returns `NULL`.
++ */
++static void * _threadRoutineWrapper( void * pArgument );
++
++/*-----------------------------------------------------------*/
++
++static void * _threadRoutineWrapper( void * pArgument )
++{
++    _threadInfo_t * pThreadInfo = ( _threadInfo_t * ) pArgument;
++
++    /* Read thread routine and argument, then free thread info. */
++    IotThreadRoutine_t threadRoutine = pThreadInfo->threadRoutine;
++    void * pThreadRoutineArgument = pThreadInfo->pArgument;
++
++    IotThreads_Free( pThreadInfo );
++
++    /* Run the thread routine. */
++    threadRoutine( pThreadRoutineArgument );
++
++    return NULL;
++}
++
++/*-----------------------------------------------------------*/
++
++bool Iot_CreateDetachedThread( IotThreadRoutine_t threadRoutine,
++                               void * pArgument,
++                               int32_t priority,
++                               size_t stackSize )
++{
++    IOT_FUNCTION_ENTRY( bool, true );
++    int posixErrno = 0;
++    bool threadAttibutesCreated = false;
++    _threadInfo_t * pThreadInfo = NULL;
++    pthread_t newThread;
++    pthread_attr_t threadAttributes;
++
++    /* Ignore priority and stack size. */
++    ( void ) priority;
++    ( void ) stackSize;
++
++    /* Allocate memory for the new thread info. */
++    pThreadInfo = IotThreads_Malloc( sizeof( _threadInfo_t ) );
++
++    if( pThreadInfo == NULL )
++    {
++        IotLogError( "Failed to allocate memory for new thread." );
++
++        IOT_SET_AND_GOTO_CLEANUP( false );
++    }
++
++    /* Set up thread attributes object. */
++    posixErrno = pthread_attr_init( &threadAttributes );
++
++    if( posixErrno != 0 )
++    {
++        IotLogError( "Failed to initialize thread attributes. errno=%d.",
++                     posixErrno );
++
++        IOT_SET_AND_GOTO_CLEANUP( false );
++    }
++
++    threadAttibutesCreated = true;
++
++    /* Set the new thread to detached. */
++    posixErrno = pthread_attr_setdetachstate( &threadAttributes,
++                                              PTHREAD_CREATE_DETACHED );
++
++    if( posixErrno != 0 )
++    {
++        IotLogError( "Failed to set detached thread attribute. errno=%d.",
++                     posixErrno );
++
++        IOT_SET_AND_GOTO_CLEANUP( false );
++    }
++
++    /* Set the thread routine and argument. */
++    pThreadInfo->threadRoutine = threadRoutine;
++    pThreadInfo->pArgument = pArgument;
++
++    /* Create the underlying POSIX thread. */
++    posixErrno = pthread_create( &newThread,
++                                 &threadAttributes,
++                                 _threadRoutineWrapper,
++                                 pThreadInfo );
++
++    if( posixErrno != 0 )
++    {
++        IotLogError( "Failed to create new thread. errno=%d.", posixErrno );
++
++        IOT_SET_AND_GOTO_CLEANUP( false );
++    }
++
++    IOT_FUNCTION_CLEANUP_BEGIN();
++
++    /* Destroy thread attributes object. */
++    if( threadAttibutesCreated == true )
++    {
++        posixErrno = pthread_attr_destroy( &threadAttributes );
++
++        if( posixErrno != 0 )
++        {
++            IotLogWarn( "Failed to destroy thread attributes. errno=%d.",
++                        posixErrno );
++        }
++    }
++
++    /* Clean up on error. */
++    if( status == false )
++    {
++        if( pThreadInfo != NULL )
++        {
++            IotThreads_Free( pThreadInfo );
++        }
++    }
++
++    IOT_FUNCTION_CLEANUP_END();
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotMutex_Create( IotMutex_t * pNewMutex,
++                      bool recursive )
++{
++    IOT_FUNCTION_ENTRY( bool, true );
++    int mutexError = 0;
++    pthread_mutexattr_t mutexAttributes, * pMutexAttributes = NULL;
++
++    if( recursive == true )
++    {
++        /* Create new mutex attributes object. */
++        mutexError = pthread_mutexattr_init( &mutexAttributes );
++
++        if( mutexError != 0 )
++        {
++            IotLogError( "Failed to initialize mutex attributes. errno=%d.",
++                         mutexError );
++
++            IOT_SET_AND_GOTO_CLEANUP( false );
++        }
++
++        pMutexAttributes = &mutexAttributes;
++
++        /* Set recursive mutex type. */
++        mutexError = pthread_mutexattr_settype( &mutexAttributes,
++                                                PTHREAD_MUTEX_RECURSIVE );
++
++        if( mutexError != 0 )
++        {
++            IotLogError( "Failed to set recursive mutex type. errno=%d.",
++                         mutexError );
++
++            IOT_SET_AND_GOTO_CLEANUP( false );
++        }
++    }
++
++    mutexError = pthread_mutex_init( pNewMutex, pMutexAttributes );
++
++    if( mutexError != 0 )
++    {
++        IotLogError( "Failed to create new mutex %p. errno=%d.",
++                     pNewMutex,
++                     mutexError );
++
++        IOT_SET_AND_GOTO_CLEANUP( false );
++    }
++
++    IOT_FUNCTION_CLEANUP_BEGIN();
++
++    /* Destroy any created mutex attributes. */
++    if( pMutexAttributes != NULL )
++    {
++        ( void ) pthread_mutexattr_destroy( &mutexAttributes );
++    }
++
++    IOT_FUNCTION_CLEANUP_END();
++}
++
++/*-----------------------------------------------------------*/
++
++void IotMutex_Destroy( IotMutex_t * pMutex )
++{
++    int mutexError = pthread_mutex_destroy( pMutex );
++
++    if( mutexError != 0 )
++    {
++        /* This block should not be reached; log an error and abort if it is. */
++        IotLogError( "Failed to destroy mutex %p. errno=%d.",
++                     pMutex,
++                     mutexError );
++
++        abort();
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++void IotMutex_Lock( IotMutex_t * pMutex )
++{
++    int mutexError = pthread_mutex_lock( pMutex );
++
++    if( mutexError != 0 )
++    {
++        /* This block should not be reached; log an error and abort if it is. */
++        IotLogError( "Failed to lock mutex %p. errno=%d.",
++                     pMutex,
++                     mutexError );
++
++        abort();
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotMutex_TryLock( IotMutex_t * pMutex )
++{
++    bool status = true;
++    int mutexError = pthread_mutex_trylock( pMutex );
++
++    if( mutexError != 0 )
++    {
++        IotLogDebug( "Mutex mutex %p is not available. errno=%d.",
++                     pMutex,
++                     mutexError );
++
++        status = false;
++    }
++
++    return status;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotMutex_Unlock( IotMutex_t * pMutex )
++{
++    int mutexError = pthread_mutex_unlock( pMutex );
++
++    if( mutexError != 0 )
++    {
++        /* This block should not be reached; log an error and abort if it is. */
++        IotLogError( "Failed to unlock mutex %p. errno=%d.",
++                     pMutex,
++                     mutexError );
++
++        abort();
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotSemaphore_Create( IotSemaphore_t * pNewSemaphore,
++                          uint32_t initialValue,
++                          uint32_t maxValue )
++{
++    /* Unused parameter. */
++    ( void ) maxValue;
++
++    bool status = true;
++
++    /* Create a GCD semaphore. */
++    pNewSemaphore->semaphore = dispatch_semaphore_create( ( long ) initialValue );
++
++    if( pNewSemaphore->semaphore == NULL )
++    {
++        IotLogError( "Failed to create new dispatch semaphore." );
++        status = false;
++    }
++    else
++    {
++        /* Set initial semaphore count. */
++        pNewSemaphore->count = initialValue;
++    }
++
++    return status;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotSemaphore_Destroy( IotSemaphore_t * pSemaphore )
++{
++    /* dispatch_release only needs to be called if ARC is not being used. */
++    #if( OS_OBJECT_HAVE_OBJC_SUPPORT == 0 )
++        dispatch_release( pSemaphore->semaphore );
++    #endif
++}
++
++/*-----------------------------------------------------------*/
++
++uint32_t IotSemaphore_GetCount( IotSemaphore_t * pSemaphore )
++{
++    return Atomic_Add_u32( &( pSemaphore->count ), 0 );
++}
++
++/*-----------------------------------------------------------*/
++
++void IotSemaphore_Wait( IotSemaphore_t * pSemaphore )
++{
++    long dispatchError = dispatch_semaphore_wait( pSemaphore->semaphore,
++                                                  DISPATCH_TIME_FOREVER );
++
++    /* Waiting forever for a valid semaphore should not fail. */
++    if( dispatchError != 0 )
++    {
++        IotLogError( "(Semaphore %p) Failed to wait on dispatch semaphore, returned %ld.",
++                     pSemaphore,
++                     dispatchError );
++
++        abort();
++    }
++
++    if( Atomic_Decrement_u32( &( pSemaphore->count ) ) == 0 )
++    {
++        IotLogError( "(Semaphore %p) Semaphore count decremented beyond 0.", pSemaphore );
++
++        abort();
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotSemaphore_TryWait( IotSemaphore_t * pSemaphore )
++{
++    return IotSemaphore_TimedWait( pSemaphore, 0 );
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotSemaphore_TimedWait( IotSemaphore_t * pSemaphore,
++                             uint32_t timeoutMs )
++{
++    bool status = true;
++
++    /* Convert timeoutMs to nanoseconds. */
++    int64_t delta = ( int64_t ) timeoutMs * 1000000LL;
++
++    /* Create a dispatch time representation representing the timeout. */
++    dispatch_time_t timeout = dispatch_time( DISPATCH_TIME_NOW,
++                                             delta );
++
++    /* Wait on the dispatch semaphore with a timeout. */
++    long dispatchError = dispatch_semaphore_wait( pSemaphore->semaphore,
++                                                  timeout );
++
++    if( dispatchError == 0 )
++    {
++        if( Atomic_Decrement_u32( &( pSemaphore->count ) ) == 0 )
++        {
++            IotLogError( "(Semaphore %p) Semaphore count decremented beyond 0.", pSemaphore );
++
++            abort();
++        }
++    }
++    else
++    {
++        status = false;
++    }
++
++    return status;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotSemaphore_Post( IotSemaphore_t * pSemaphore )
++{
++    Atomic_Increment_u32( &( pSemaphore->count ) );
++
++    /* Signal dispatch semaphore. The return value (whether a thread was woken)
++     * is ignored. */
++    ( void ) dispatch_semaphore_signal( pSemaphore->semaphore );
++}
++
++/*-----------------------------------------------------------*/
+diff --git a/ports/win32/include/iot_platform_types_win32.h b/ports/win32/include/iot_platform_types_win32.h
+new file mode 100644
+index 0000000..6d49925
+--- /dev/null
++++ b/ports/win32/include/iot_platform_types_win32.h
+@@ -0,0 +1,71 @@
++/*
++ * Copyright (C) 2019 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy of
++ * this software and associated documentation files (the "Software"), to deal in
++ * the Software without restriction, including without limitation the rights to
++ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++ * the Software, and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++/**
++ * @file iot_platform_types_win32.h
++ * @brief Definitions of platform layer types on Win32 systems.
++ */
++
++#ifndef IOT_PLATFORM_TYPES_WIN32_H_
++#define IOT_PLATFORM_TYPES_WIN32_H_
++
++/* Standard includes. */
++#include <stdint.h>
++
++/* Win32 includes. WinSock2 is needed to prevent the usage of the WinSock
++ * header in Windows.h */
++#include <WinSock2.h>
++#include <ws2tcpip.h>
++#include <Windows.h>
++
++/**
++ * @brief The "mutex" type on Win32 systems.
++ *
++ * The Win32 critical section object is used in place of mutex because it
++ * consumes less resources and does not need to be shared between processes.
++ */
++typedef CRITICAL_SECTION _IotSystemMutex_t;
++
++/**
++ * @brief The semaphore type on Win32 systems.
++ *
++ * Because the Win32 API does not provide a way to obtain a semaphore count,
++ * the count must be tracked with the semaphore. As noted by the API documentation,
++ * semaphore count should not be relied on as it may change before it can be tested.
++ * Semaphore count is currently only used in tests.
++ */
++typedef struct _IotSystemSemaphore
++{
++    uint32_t count;              /**< @brief The current count of the semaphore. */
++    HANDLE semaphore;            /**< @brief Handle to the Win32 semaphore. */
++} _IotSystemSemaphore_t;
++
++/**
++ * @brief Represents an #IotTimer_t on Win32 systems.
++ */
++typedef struct _IotSystemTimer
++{
++    HANDLE timer;                       /**< @brief Handle of the Win32 timer. */
++    void * pArgument;                   /**< @brief First argument to threadRoutine. */
++    void ( * threadRoutine )( void * ); /**< @brief Thread function to run on timer expiration. */
++} _IotSystemTimer_t;
++
++#endif /* ifndef IOT_PLATFORM_TYPES_WIN32_H_ */
+diff --git a/ports/win32/src/iot_clock_win32.c b/ports/win32/src/iot_clock_win32.c
+new file mode 100644
+index 0000000..b787b20
+--- /dev/null
++++ b/ports/win32/src/iot_clock_win32.c
+@@ -0,0 +1,251 @@
++/*
++ * Copyright (C) 2019 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy of
++ * this software and associated documentation files (the "Software"), to deal in
++ * the Software without restriction, including without limitation the rights to
++ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++ * the Software, and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++/**
++ * @file iot_clock_win32.c
++ * @brief Implementation of the functions in iot_clock.h for Win32 systems.
++ */
++
++/* The config header is always included first. */
++#include "iot_config.h"
++
++/* Standard includes. */
++#include <stdio.h>
++#include <stdlib.h>
++
++/* Platform clock include. */
++#include "platform/iot_clock.h"
++
++/* Configure logs for the functions in this file. */
++#ifdef IOT_LOG_LEVEL_PLATFORM
++    #define LIBRARY_LOG_LEVEL        IOT_LOG_LEVEL_PLATFORM
++#else
++    #ifdef IOT_LOG_LEVEL_GLOBAL
++        #define LIBRARY_LOG_LEVEL    IOT_LOG_LEVEL_GLOBAL
++    #else
++        #define LIBRARY_LOG_LEVEL    IOT_LOG_NONE
++    #endif
++#endif
++
++#define LIBRARY_LOG_NAME    ( "CLOCK" )
++#include "iot_logging_setup.h"
++
++/* Logging macro for Win32 errors. */
++#if LIBRARY_LOG_LEVEL > IOT_LOG_NONE
++    #include <strsafe.h>
++
++    #define _logWin32TimerError( pTimer, pMessage )                          \
++    {                                                                        \
++        char * pErrorMessage = NULL;                                         \
++                                                                             \
++        FormatMessageA( FORMAT_MESSAGE_ALLOCATE_BUFFER |                     \
++                        FORMAT_MESSAGE_FROM_SYSTEM |                         \
++                        FORMAT_MESSAGE_IGNORE_INSERTS,                       \
++                        NULL,                                                \
++                        GetLastError(),                                      \
++                        0,                                                   \
++                        ( LPSTR ) ( &pErrorMessage ),                        \
++                        0,                                                   \
++                        NULL );                                              \
++        pErrorMessage[ strlen( pErrorMessage ) - 3 ] = '\0';                 \
++                                                                             \
++        IotLogError( "(Timer %p) %s %s.", pTimer, pMessage, pErrorMessage ); \
++        LocalFree( pErrorMessage );                                          \
++    }
++#else /* if LIBRARY_LOG_LEVEL > IOT_LOG_NONE */
++    #define _logWin32TimerError( pTimer, pMessage )
++#endif /* if LIBRARY_LOG_LEVEL > IOT_LOG_NONE */
++
++/*-----------------------------------------------------------*/
++
++/**
++ * @brief Wraps an #IotThreadRoutine_t with a Win32-compliant one.
++ *
++ * @param[in] pArgument The value passed as `Parameter` to `CreateTimerQueueTimer`.
++ * @param[in] timerOrWaitFired Ignored.
++ */
++static VOID CALLBACK _timerExpirationWrapper( _In_ PVOID pArgument,
++                                              _In_ BOOLEAN timerOrWaitFired );
++
++/*-----------------------------------------------------------*/
++
++static VOID CALLBACK _timerExpirationWrapper( _In_ PVOID pArgument,
++                                              _In_ BOOLEAN timerOrWaitFired )
++{
++    IotTimer_t * pTimer = ( IotTimer_t * ) pArgument;
++
++    /* Silence warnings about unused parameters. */
++    UNREFERENCED_PARAMETER( timerOrWaitFired );
++
++    /* Call the wrapped thread routine. */
++    pTimer->threadRoutine( pTimer->pArgument );
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotClock_GetTimestring( char * pBuffer,
++                             size_t bufferSize,
++                             size_t * pTimestringLength )
++{
++    bool status = true;
++    int timestringLength = 0;
++    SYSTEMTIME systemTime = { 0 };
++
++    /* Get the Win32 system time and format it in the given buffer. */
++    GetSystemTime( &systemTime );
++
++    timestringLength = snprintf( pBuffer,
++                                 bufferSize,
++                                 "%u-%02u-%02u %02u:%02u:%02u.%03u",
++                                 systemTime.wYear,
++                                 systemTime.wMonth,
++                                 systemTime.wDay,
++                                 systemTime.wHour,
++                                 systemTime.wMinute,
++                                 systemTime.wSecond,
++                                 systemTime.wMilliseconds );
++
++    /* Check for errors from snprintf. */
++    if( timestringLength < 0 )
++    {
++        /* Encoding error. */
++        status = false;
++    }
++    else if( ( size_t ) timestringLength >= bufferSize )
++    {
++        /* Buffer too small. */
++        status = false;
++    }
++    else
++    {
++        /* Success; set the output parameter. */
++        *pTimestringLength = ( size_t ) timestringLength;
++    }
++
++    return status;
++}
++
++/*-----------------------------------------------------------*/
++
++uint64_t IotClock_GetTimeMs( void )
++{
++    return ( uint64_t ) GetTickCount64();
++}
++
++/*-----------------------------------------------------------*/
++
++void IotClock_SleepMs( uint32_t sleepTimeMs )
++{
++    Sleep( ( DWORD ) sleepTimeMs );
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotClock_TimerCreate( IotTimer_t * pNewTimer,
++                           IotThreadRoutine_t expirationRoutine,
++                           void * pArgument )
++{
++    /* Set the members of the new timer. */
++    pNewTimer->pArgument = pArgument;
++    pNewTimer->threadRoutine = expirationRoutine;
++    pNewTimer->timer = INVALID_HANDLE_VALUE;
++
++    return true;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotClock_TimerDestroy( IotTimer_t * pTimer )
++{
++    BOOL timerStatus = 0;
++
++    if( pTimer->timer != INVALID_HANDLE_VALUE )
++    {
++        /* Per the Win32 API docs, DeleteTimerQueueTimer should be retried until
++         * successful. */
++        while( true )
++        {
++            timerStatus = DeleteTimerQueueTimer( NULL,
++                                                 pTimer->timer,
++                                                 NULL );
++
++            /* Check if the timer was successfully deleted. */
++            if( timerStatus == 0 )
++            {
++                if( GetLastError() == ERROR_IO_PENDING )
++                {
++                    /* Nothing further needs to be done for ERROR_IO_PENDING. */
++                    break;
++                }
++                else
++                {
++                    /* Sleep a short time before trying again. */
++                    Sleep( 100 );
++                }
++            }
++            else
++            {
++                /* Timer was successfully deleted. */
++                break;
++            }
++        }
++
++        IotLogDebug( "(Timer %p) Timer destroyed.", pTimer );
++        pTimer->timer = INVALID_HANDLE_VALUE;
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotClock_TimerArm( IotTimer_t * pTimer,
++                        uint32_t relativeTimeoutMs,
++                        uint32_t periodMs )
++{
++    BOOL timerStatus = 0;
++
++    /* Any previous timer must be destroyed before scheduling a new one in the
++     * Win32 API. */
++    IotClock_TimerDestroy( pTimer );
++
++    timerStatus = CreateTimerQueueTimer( &( pTimer->timer ),
++                                         NULL,
++                                         _timerExpirationWrapper,
++                                         pTimer,
++                                         ( DWORD ) relativeTimeoutMs,
++                                         ( DWORD ) periodMs,
++                                         WT_EXECUTEDEFAULT );
++
++    if( timerStatus == 0 )
++    {
++        _logWin32TimerError( pTimer, "Failed to create timer." );
++    }
++    else
++    {
++        IotLogDebug( "(Timer %p) Timer armed with timeout %lu and period %lu.",
++                     pTimer,
++                     ( unsigned long ) relativeTimeoutMs,
++                     ( unsigned long ) periodMs );
++    }
++
++    return( timerStatus != 0 );
++}
++
++/*-----------------------------------------------------------*/
+diff --git a/ports/win32/src/iot_threads_win32.c b/ports/win32/src/iot_threads_win32.c
+new file mode 100644
+index 0000000..d297dd9
+--- /dev/null
++++ b/ports/win32/src/iot_threads_win32.c
+@@ -0,0 +1,391 @@
++/*
++ * Copyright (C) 2019 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy of
++ * this software and associated documentation files (the "Software"), to deal in
++ * the Software without restriction, including without limitation the rights to
++ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++ * the Software, and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++/**
++ * @file iot_threads_win32.c
++ * @brief Implementation of the functions in iot_threads.h for Win32 systems.
++ */
++
++/* The config header is always included first. */
++#include "iot_config.h"
++
++/* Standard includes. */
++#include <stdlib.h>
++
++/* Platform threads include. */
++#include "platform/iot_threads.h"
++
++/* Atomic include. */
++#include "iot_atomic.h"
++
++/* Error handling include. */
++#include "iot_error.h"
++
++/* Configure logs for the functions in this file. */
++#ifdef IOT_LOG_LEVEL_PLATFORM
++    #define LIBRARY_LOG_LEVEL        IOT_LOG_LEVEL_PLATFORM
++#else
++    #ifdef IOT_LOG_LEVEL_GLOBAL
++        #define LIBRARY_LOG_LEVEL    IOT_LOG_LEVEL_GLOBAL
++    #else
++        #define LIBRARY_LOG_LEVEL    IOT_LOG_NONE
++    #endif
++#endif
++
++#define LIBRARY_LOG_NAME    ( "THREAD" )
++#include "iot_logging_setup.h"
++
++/* Logging macro for Win32 errors. */
++#if LIBRARY_LOG_LEVEL > IOT_LOG_NONE
++    #include <strsafe.h>
++
++    #define _logWin32Error( pName, pObject, pMessage )                            \
++    {                                                                             \
++        char * pErrorMessage = NULL;                                              \
++                                                                                  \
++        FormatMessageA( FORMAT_MESSAGE_ALLOCATE_BUFFER |                          \
++                        FORMAT_MESSAGE_FROM_SYSTEM |                              \
++                        FORMAT_MESSAGE_IGNORE_INSERTS,                            \
++                        NULL,                                                     \
++                        GetLastError(),                                           \
++                        0,                                                        \
++                        ( LPSTR ) ( &pErrorMessage ),                             \
++                        0,                                                        \
++                        NULL );                                                   \
++        pErrorMessage[ strlen( pErrorMessage ) - 3 ] = '\0';                      \
++                                                                                  \
++        IotLogError( "(%s %p) %s %s.", pName, pObject, pMessage, pErrorMessage ); \
++        LocalFree( pErrorMessage );                                               \
++    }
++#else /* if LIBRARY_LOG_LEVEL > IOT_LOG_NONE */
++    #define _logWin32Error( pName, pObject, pMessage )
++#endif /* if LIBRARY_LOG_LEVEL > IOT_LOG_NONE */
++
++/*
++ * Provide default values for undefined memory allocation functions.
++ */
++#ifndef IotThreads_Malloc
++    #include <stdlib.h>
++
++/**
++ * @brief Memory allocation. This function should have the same signature
++ * as [malloc](http://pubs.opengroup.org/onlinepubs/9699919799/functions/malloc.html).
++ */
++    #define IotThreads_Malloc    malloc
++#endif
++#ifndef IotThreads_Free
++    #include <stdlib.h>
++
++/**
++ * @brief Free memory. This function should have the same signature as
++ * [free](http://pubs.opengroup.org/onlinepubs/9699919799/functions/free.html).
++ */
++    #define IotThreads_Free    free
++#endif
++
++/*-----------------------------------------------------------*/
++
++/**
++ * @brief Holds information about an active detached thread.
++ */
++typedef struct _threadInfo
++{
++    void * pArgument;                 /**< @brief First argument to `threadRoutine`. */
++    IotThreadRoutine_t threadRoutine; /**< @brief Thread function to run. */
++} _threadInfo_t;
++
++/*-----------------------------------------------------------*/
++
++/**
++ * @brief Wraps an #IotThreadRoutine_t with a Win32-compliant one.
++ *
++ * @param[in] pArgument The value passed as `lpParameter` to `CreateThread`.
++ *
++ * @return Does not return, calls `ExitThread` with an exit code of `0`.
++ */
++static DWORD WINAPI _threadRoutineWrapper( _In_ LPVOID pArgument );
++
++/*-----------------------------------------------------------*/
++
++static DWORD WINAPI _threadRoutineWrapper( _In_ LPVOID pArgument )
++{
++    /* Cast argument to correct type. */
++    _threadInfo_t * pThreadInfo = ( _threadInfo_t * ) pArgument;
++
++    /* Read thread routine and argument, then free thread info. */
++    IotThreadRoutine_t threadRoutine = pThreadInfo->threadRoutine;
++    void * pThreadRoutineArgument = pThreadInfo->pArgument;
++
++    IotThreads_Free( pThreadInfo );
++
++    /* Run the thread routine. */
++    threadRoutine( pThreadRoutineArgument );
++
++    ExitThread( 0 );
++}
++
++/*-----------------------------------------------------------*/
++
++bool Iot_CreateDetachedThread( IotThreadRoutine_t threadRoutine,
++                               void * pArgument,
++                               int32_t priority,
++                               size_t stackSize )
++{
++    IOT_FUNCTION_ENTRY( bool, true );
++    HANDLE newThread = NULL;
++    _threadInfo_t * pThreadInfo = NULL;
++
++    /* Priority is not used on Windows. */
++    ( void ) priority;
++
++    /* Determine the stack size of the thread to create. */
++    SIZE_T threadStackSize = 0;
++
++    if( stackSize != IOT_THREAD_DEFAULT_STACK_SIZE )
++    {
++        threadStackSize = ( SIZE_T ) stackSize;
++    }
++
++    /* Allocate memory for a new thread info. */
++    pThreadInfo = IotThreads_Malloc( sizeof( _threadInfo_t ) );
++
++    if( pThreadInfo == NULL )
++    {
++        IotLogError( "Failed to allocate memory for new thread." );
++
++        IOT_SET_AND_GOTO_CLEANUP( false );
++    }
++
++    /* Set the members of the thread info and create a new thread. */
++    pThreadInfo->pArgument = pArgument;
++    pThreadInfo->threadRoutine = threadRoutine;
++
++    newThread = CreateThread( NULL,
++                              threadStackSize,
++                              _threadRoutineWrapper,
++                              pThreadInfo,
++                              0,
++                              NULL );
++
++    if( newThread == NULL )
++    {
++        IotLogError( "Failed to create new thread." );
++
++        IOT_SET_AND_GOTO_CLEANUP( false );
++    }
++    else
++    {
++        IotLogDebug( "(Thread %p) New thread created.", newThread );
++
++        /* Close the thread handle; it's not needed. This won't terminate the thread. */
++        if( CloseHandle( newThread ) == 0 )
++        {
++            _logWin32Error( "Thread", newThread, "Failed to close thread handle." );
++            abort();
++        }
++    }
++
++    /* Clean up on error. */
++    IOT_FUNCTION_CLEANUP_BEGIN();
++
++    if( status == false )
++    {
++        if( pThreadInfo != NULL )
++        {
++            IotThreads_Free( pThreadInfo );
++        }
++    }
++
++    IOT_FUNCTION_CLEANUP_END();
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotMutex_Create( IotMutex_t * pNewMutex,
++                      bool recursive )
++{
++    /* The Win32 critical section is always recursive, so this parameter is
++     * ignored. */
++    UNREFERENCED_PARAMETER( recursive );
++
++    InitializeCriticalSection( pNewMutex );
++
++    return true;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotMutex_Destroy( IotMutex_t * pMutex )
++{
++    DeleteCriticalSection( pMutex );
++}
++
++/*-----------------------------------------------------------*/
++
++void IotMutex_Lock( IotMutex_t * pMutex )
++{
++    EnterCriticalSection( pMutex );
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotMutex_TryLock( IotMutex_t * pMutex )
++{
++    bool status = true;
++
++    if( TryEnterCriticalSection( pMutex ) == 0 )
++    {
++        IotLogDebug( "(Mutex %p) Mutex not available.", pMutex );
++
++        status = false;
++    }
++
++    return status;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotMutex_Unlock( IotMutex_t * pMutex )
++{
++    LeaveCriticalSection( pMutex );
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotSemaphore_Create( IotSemaphore_t * pNewSemaphore,
++                          uint32_t initialValue,
++                          uint32_t maxValue )
++{
++    bool status = true;
++
++    /* Create a Win32 semaphore exclusive to this process. */
++    pNewSemaphore->semaphore = CreateSemaphoreA( NULL,
++                                                 ( LONG ) initialValue,
++                                                 ( LONG ) maxValue,
++                                                 NULL );
++
++    if( pNewSemaphore->semaphore == NULL )
++    {
++        _logWin32Error( "Semaphore", pNewSemaphore, "Failed to create new semaphore." );
++
++        status = false;
++    }
++    else
++    {
++        /* Set initial semaphore count. */
++        pNewSemaphore->count = initialValue;
++    }
++
++    return status;
++}
++
++/*-----------------------------------------------------------*/
++
++void IotSemaphore_Destroy( IotSemaphore_t * pSemaphore )
++{
++    if( CloseHandle( pSemaphore->semaphore ) == 0 )
++    {
++        /* This should never happen, log an error and abort if it does. */
++        _logWin32Error( "Semaphore", pSemaphore, "Failed to close semaphore handle." );
++
++        abort();
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++uint32_t IotSemaphore_GetCount( IotSemaphore_t * pSemaphore )
++{
++    return Atomic_Add_u32( &( pSemaphore->count ), 0 );
++}
++
++/*-----------------------------------------------------------*/
++
++void IotSemaphore_Wait( IotSemaphore_t * pSemaphore )
++{
++    if( WaitForSingleObject( pSemaphore->semaphore, INFINITE ) != WAIT_OBJECT_0 )
++    {
++        /* This should never happen, log an error and abort if it does. */
++        _logWin32Error( "Semaphore", pSemaphore, "Failed to wait on semaphore." );
++
++        abort();
++    }
++
++    if( Atomic_Decrement_u32( &( pSemaphore->count ) ) == 0 )
++    {
++        IotLogError( "(Semaphore %p) Semaphore count decremented beyond 0.", pSemaphore );
++
++        abort();
++    }
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotSemaphore_TryWait( IotSemaphore_t * pSemaphore )
++{
++    return IotSemaphore_TimedWait( pSemaphore, 0 );
++}
++
++/*-----------------------------------------------------------*/
++
++bool IotSemaphore_TimedWait( IotSemaphore_t * pSemaphore,
++                             uint32_t timeoutMs )
++{
++    DWORD status = 0;
++
++    status = WaitForSingleObject( pSemaphore->semaphore, ( DWORD ) timeoutMs );
++
++    if( status == WAIT_OBJECT_0 )
++    {
++        if( Atomic_Decrement_u32( &( pSemaphore->count ) ) == 0 )
++        {
++            IotLogError( "(Semaphore %p) Semaphore count decremented beyond 0.", pSemaphore );
++
++            abort();
++        }
++    }
++    else if( status != WAIT_TIMEOUT )
++    {
++        /* This should never happen, log an error and abort if it does. */
++        _logWin32Error( "Semaphore", pSemaphore, "Failed to wait on semaphore." );
++
++        abort();
++    }
++
++    return( status == WAIT_OBJECT_0 );
++}
++
++/*-----------------------------------------------------------*/
++
++void IotSemaphore_Post( IotSemaphore_t * pSemaphore )
++{
++    Atomic_Increment_u32( &( pSemaphore->count ) );
++
++    if( ReleaseSemaphore( pSemaphore->semaphore, 1, NULL ) == 0 )
++    {
++        /* This should never happen, log an error and abort if it does. */
++        _logWin32Error( "Semaphore", pSemaphore, "Failed to post to semaphore." );
++
++        abort();
++    }
++}
++
++/*-----------------------------------------------------------*/
+diff --git a/ports/win32/win32.cmake b/ports/win32/win32.cmake
+new file mode 100644
+index 0000000..7da483c
+--- /dev/null
++++ b/ports/win32/win32.cmake
+@@ -0,0 +1,17 @@
++# Add the network header for this platform.
++list( APPEND PLATFORM_COMMON_HEADERS
++     ${PORTS_DIRECTORY}/common/include/iot_network_mbedtls.h )
++
++# Platform library source files.
++set( PLATFORM_SOURCES
++     ${PORTS_DIRECTORY}/${IOT_PLATFORM_NAME}/src/iot_clock_${IOT_PLATFORM_NAME}.c
++     ${PORTS_DIRECTORY}/${IOT_PLATFORM_NAME}/src/iot_threads_${IOT_PLATFORM_NAME}.c
++     ${PORTS_DIRECTORY}/common/src/iot_network_mbedtls.c
++     ${PORTS_DIRECTORY}/common/src/iot_network_metrics.c )
++
++# Set the types header for this port.
++set( PORT_TYPES_HEADER ${PORTS_DIRECTORY}/${IOT_PLATFORM_NAME}/include/iot_platform_types_${IOT_PLATFORM_NAME}.h )
++
++# Set the dependencies required by this port.
++# On Windows, mbed TLS and Winsock are used.
++set( PLATFORM_DEPENDENCIES mbedtls ws2_32 )
+diff --git a/scripts/ci_test_build.sh b/scripts/ci_test_build.sh
+index e576c45..da8747f 100755
+--- a/scripts/ci_test_build.sh
++++ b/scripts/ci_test_build.sh
+@@ -8,13 +8,31 @@ set -e
+ # Treat warnings as errors.
+ if [ "$TRAVIS_COMPILER" = "clang" ]; then
+     COMPILER_OPTIONS+=" -Werror"
++elif [ "$TRAVIS_COMPILER" = "msvc" ]; then
++    COMPILER_OPTIONS+=" /W4 /wd4200 /WX"
+ fi
+ 
+ # Build demos.
+ cmake .. -DCMAKE_C_FLAGS="$COMPILER_OPTIONS"
+-make -j2
++
++if [ "$TRAVIS_OS_NAME" = "windows" ]; then
++    MSBuild.exe ALL_BUILD.vcxproj -m -clp:summary -verbosity:minimal
++else
++    make -j2
++fi
++
++# Unity places function declarations within other functions.
++# Disable the MSVC warning about this.
++if [ "$TRAVIS_COMPILER" = "msvc" ]; then
++    COMPILER_OPTIONS+=" /wd4210"
++fi
+ 
+ # Build tests. Enable all logging.
+ rm -rf *
+ cmake .. -DIOT_BUILD_TESTS=1 -DCMAKE_C_FLAGS="$COMPILER_OPTIONS -DIOT_LOG_LEVEL_GLOBAL=IOT_LOG_DEBUG"
+-make -j2
++
++if [ "$TRAVIS_OS_NAME" = "windows" ]; then
++    MSBuild.exe ALL_BUILD.vcxproj -m -clp:summary -verbosity:minimal
++else
++    make -j2
++fi
+diff --git a/scripts/ci_test_mqtt.sh b/scripts/ci_test_mqtt.sh
+index e5dd2f5..bcced90 100755
+--- a/scripts/ci_test_mqtt.sh
++++ b/scripts/ci_test_mqtt.sh
+@@ -12,12 +12,18 @@ DEMO_OPTIONS="-i $IOT_IDENTIFIER"
+ 
+ # For pull request builds on Linux, run against a local Mosquitto broker.
+ #
++# On macOS and Windows, a local Mosquitto broker is not available. Only tests
++# that do not use the network should run on these platforms.
++#
+ # For commit builds all platforms will test against AWS IoT.
+ if [ "$TRAVIS_PULL_REQUEST" != "false" ]; then
+     if [ "$TRAVIS_OS_NAME" = "linux" ]; then
+         # Set the flags and options for a local Mosquitto broker on Linux.
+         CMAKE_FLAGS+=" -DIOT_TEST_MQTT_MOSQUITTO=1 -DIOT_TEST_SERVER=\\\"localhost\\\""
+         DEMO_OPTIONS+=" -n -u -h localhost -p 1883"
++    else
++        # Specify that the tests should not use the network on macOS and Windows.
++        TEST_OPTIONS="-n"
+     fi
+ else
+     # Set credentials for AWS IoT.
+@@ -27,17 +33,31 @@ fi
+ # Build and run executables.
+ cmake .. -DIOT_BUILD_TESTS=1 -DCMAKE_BUILD_TYPE=Debug -DIOT_NETWORK_USE_OPENSSL=$IOT_NETWORK_USE_OPENSSL -DCMAKE_C_FLAGS="$CMAKE_FLAGS"
+ 
+-make -j2 iot_tests_mqtt iot_demo_mqtt
++if [ "$TRAVIS_OS_NAME" = "windows" ]; then
++    MSBuild.exe libraries/standard/mqtt/iot_tests_mqtt.vcxproj -m -clp:summary -verbosity:minimal
++    MSBuild.exe demos/iot_demo_mqtt.vcxproj -m -clp:summary -verbosity:minimal
++
++    ./bin/Debug/iot_tests_mqtt.exe $TEST_OPTIONS
++else
++    make -j2 iot_tests_mqtt iot_demo_mqtt
+ 
+-./output/bin/iot_tests_mqtt $TEST_OPTIONS
++    ./output/bin/iot_tests_mqtt $TEST_OPTIONS
+ 
+-if [ "$TRAVIS_OS_NAME" = "linux" ]; then
+-    ./output/bin/iot_demo_mqtt $DEMO_OPTIONS
++    if [ "$TRAVIS_OS_NAME" = "linux" ]; then
++        ./output/bin/iot_demo_mqtt $DEMO_OPTIONS
++    fi
+ fi
+ 
+ # Rebuild and run tests in static memory mode.
+ cmake .. -DIOT_BUILD_TESTS=1 -DCMAKE_BUILD_TYPE=Debug -DIOT_NETWORK_USE_OPENSSL=$IOT_NETWORK_USE_OPENSSL -DCMAKE_C_FLAGS="$CMAKE_FLAGS -DIOT_STATIC_MEMORY_ONLY=1"
+ 
+-make -j2 iot_tests_mqtt iot_demo_mqtt
++if [ "$TRAVIS_OS_NAME" = "windows" ]; then
++    MSBuild.exe libraries/standard/mqtt/iot_tests_mqtt.vcxproj -m -clp:summary -verbosity:minimal
++    MSBuild.exe demos/iot_demo_mqtt.vcxproj -m -clp:summary -verbosity:minimal
++
++    ./bin/Debug/iot_tests_mqtt.exe $TEST_OPTIONS
++else
++    make -j2 iot_tests_mqtt iot_demo_mqtt
+ 
+-./output/bin/iot_tests_mqtt $TEST_OPTIONS
++    ./output/bin/iot_tests_mqtt $TEST_OPTIONS
++fi
+diff --git a/scripts/setup/ci_setup_osx.sh b/scripts/setup/ci_setup_osx.sh
+new file mode 100644
+index 0000000..d0926ec
+--- /dev/null
++++ b/scripts/setup/ci_setup_osx.sh
+@@ -0,0 +1,6 @@
++#!/bin/sh
++
++# Travis CI uses this script to set up the test environment on macOS.
++
++# Set compiler options for macOS. Silence field initializer warnings.
++export COMPILER_OPTIONS="-Wall -Wextra -Wno-missing-field-initializers"
+diff --git a/scripts/setup/ci_setup_windows.sh b/scripts/setup/ci_setup_windows.sh
+new file mode 100644
+index 0000000..0f2e311
+--- /dev/null
++++ b/scripts/setup/ci_setup_windows.sh
+@@ -0,0 +1,10 @@
++#!/bin/sh
++
++# Travis CI uses this script to set up the test environment on Windows.
++
++# Location of MSBuild.exe in the Travis CI test environment.
++MSBUILD_PATH="/c/Program Files (x86)/Microsoft Visual Studio/2017/BuildTools/MSBuild/15.0/Bin"
++export PATH=$PATH:$MSBUILD_PATH
++
++# Use default compiler options for MSVC.
++export COMPILER_OPTIONS=""

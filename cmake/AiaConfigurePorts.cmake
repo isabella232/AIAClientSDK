@@ -1,0 +1,70 @@
+# Point the AIA SDK toward alternative ports.
+#
+# If you have an alternative ports folder, specify it as follows:
+#     cmake <path-to-source> 
+#           -DALT_PORTS_FOLDER=<path-to-alternative-ports-folder>
+
+function(AiaConfigurePorts)
+	set( AIA_BUTTON_FOLDER "${PROJECT_SOURCE_DIR}/ports/Button" CACHE FILEPATH "" FORCE )
+	set( AIA_CLOCK_FOLDER "${PROJECT_SOURCE_DIR}/ports/Clock" CACHE FILEPATH "" FORCE )
+	set( AIA_COMMON_FOLDER "${PROJECT_SOURCE_DIR}/ports/Common" CACHE FILEPATH "" FORCE )
+	set( AIA_CRYPTO_FOLDER "${PROJECT_SOURCE_DIR}/ports/Crypto" CACHE FILEPATH "" FORCE )
+	set( AIA_HTTP_FOLDER "${PROJECT_SOURCE_DIR}/ports/HTTP" CACHE FILEPATH "" FORCE )
+	set( AIA_IOT_FOLDER "${PROJECT_SOURCE_DIR}/ports/IoT" CACHE FILEPATH "" FORCE )
+	set( AIA_LWA_FOLDER "${PROJECT_SOURCE_DIR}/ports/LWA" CACHE FILEPATH "" FORCE )
+	set( AIA_MEMORY_FOLDER "${PROJECT_SOURCE_DIR}/ports/Memory" CACHE FILEPATH "" FORCE )
+	set( AIA_MICROPHONE_FOLDER "${PROJECT_SOURCE_DIR}/ports/Microphone" CACHE FILEPATH "" FORCE )
+	set( AIA_REGISTRATION_FOLDER "${PROJECT_SOURCE_DIR}/ports/Registration" CACHE FILEPATH "" FORCE )
+	set( AIA_STORAGE_FOLDER "${PROJECT_SOURCE_DIR}/ports/Storage" CACHE FILEPATH "" FORCE )
+
+	if(ALT_PORTS_FOLDER)
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/Button")
+			set( AIA_BUTTON_FOLDER "${ALT_PORTS_FOLDER}/Button" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/Clock")
+			set( AIA_CLOCK_FOLDER "${ALT_PORTS_FOLDER}/Clock" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/Common")
+			set( AIA_COMMON_FOLDER "${ALT_PORTS_FOLDER}/Common" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/Crypto")
+			set( AIA_CRYPTO_FOLDER "${ALT_PORTS_FOLDER}/Crypto" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/HTTP")
+			set( AIA_HTTP_FOLDER "${ALT_PORTS_FOLDER}/HTTP" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/IoT")
+			set( AIA_IOT_FOLDER "${ALT_PORTS_FOLDER}/IoT" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/LWA")
+			set( AIA_LWA_FOLDER "${ALT_PORTS_FOLDER}/LWA" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/Memory")
+			set( AIA_MEMORY_FOLDER "${ALT_PORTS_FOLDER}/Memory" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/Microphone")
+			set( AIA_MICROPHONE_FOLDER "${ALT_PORTS_FOLDER}/Microphone" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/Registration")
+			set( AIA_REGISTRATION_FOLDER "${ALT_PORTS_FOLDER}/Registration" CACHE FILEPATH "" FORCE )
+		endif()
+
+		if(EXISTS "${ALT_PORTS_FOLDER}/Storage")
+			set( AIA_STORAGE_FOLDER "${ALT_PORTS_FOLDER}/Storage" CACHE FILEPATH "" FORCE )
+		endif()
+
+	endif()
+
+endfunction()
+
+			

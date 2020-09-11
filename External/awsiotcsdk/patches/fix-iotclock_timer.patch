@@ -1,0 +1,165 @@
+Fix IotClock_Timer implementation on MacOS.
+
+From: Ken Cecka <kcecka@amazon.com>
+
+**Problem:**
+
+The existing implementation of IotClockTimer in the SDK only calls the callback once after the initial delay, and does not continue to call it periodically.
+
+**Solution:**
+
+Reworked the implementation to use a proper timer which continues to execute periodically.
+
+**Risk:**
+
+Very minimal testing; it's good enough to get the aia_regulator unit tests to pass.  Not planning to spend more time on testing unless/until we see timer related problems, as MacOS is just a development platform.
+
+**Testing done:**
+
+Passes aia_regulator unit tests, which depend on this functionality.
+
+**Release notes:**
+
+None.
+
+**CR:**
+---
+ ports/macos/include/iot_platform_types_macos.h |    3 -
+ ports/macos/src/iot_clock_macos.c              |   75 +++++++++---------------
+ 2 files changed, 28 insertions(+), 50 deletions(-)
+
+diff --git a/ports/macos/include/iot_platform_types_macos.h b/ports/macos/include/iot_platform_types_macos.h
+index 5dd7acd..8b902bd 100644
+--- a/ports/macos/include/iot_platform_types_macos.h
++++ b/ports/macos/include/iot_platform_types_macos.h
+@@ -68,8 +68,7 @@ typedef struct _IotSystemSemaphore
+  */
+ typedef struct _IotSystemTimer
+ {
+-    dispatch_block_t dispatchBlock;     /**< @brief A dispatch block that executes for the timer. */
+-    uint32_t periodMs;                  /**< @brief Expiration period of this timer, if any. */
++    dispatch_source_t timer;            /**< @brief Underlying dispatch source. */
+     void * pArgument;                   /**< @brief First argument to threadRoutine. */
+     void ( * threadRoutine )( void * ); /**< @brief Thread function to run on timer expiration. */
+ } _IotSystemTimer_t;
+diff --git a/ports/macos/src/iot_clock_macos.c b/ports/macos/src/iot_clock_macos.c
+index 6c05cba..7e7f936 100644
+--- a/ports/macos/src/iot_clock_macos.c
++++ b/ports/macos/src/iot_clock_macos.c
+@@ -77,25 +77,6 @@
+ 
+ /*-----------------------------------------------------------*/
+ 
+-/**
+- * @brief Wraps an #IotThreadRoutine_t with a GCD-compliant one.
+- *
+- * @param[in] pArgument The value passed to `dispatch_after_f`.
+- */
+-static void _timerExpirationWrapper( void * pArgument );
+-
+-/*-----------------------------------------------------------*/
+-
+-static void _timerExpirationWrapper( void * pArgument )
+-{
+-    IotTimer_t * pTimer = pArgument;
+-
+-    /* Invoke the wrapped expiration routine. */
+-    pTimer->threadRoutine( pTimer->pArgument );
+-}
+-
+-/*-----------------------------------------------------------*/
+-
+ bool IotClock_GetTimestring( char * pBuffer,
+                              size_t bufferSize,
+                              size_t * pTimestringLength )
+@@ -177,7 +158,7 @@ bool IotClock_TimerCreate( IotTimer_t * pNewTimer,
+                            IotThreadRoutine_t expirationRoutine,
+                            void * pArgument )
+ {
+-    pNewTimer->dispatchBlock = NULL;
++    pNewTimer->timer = NULL;
+ 
+     /* Save the expiration routine and argument for use later. */
+     pNewTimer->pArgument = pArgument;
+@@ -191,14 +172,10 @@ bool IotClock_TimerCreate( IotTimer_t * pNewTimer,
+ void IotClock_TimerDestroy( IotTimer_t * pTimer )
+ {
+     /* Cancel any timer work that may already be scheduled. */
+-    if( pTimer->dispatchBlock != NULL )
++    if( pTimer->timer != NULL )
+     {
+-        dispatch_block_cancel( pTimer->dispatchBlock );
+-
+-        /* Block_release only needs to be called if ARC is not being used. */
+-        #if( OS_OBJECT_HAVE_OBJC_SUPPORT == 0 )
+-            Block_release( pTimer->dispatchBlock );
+-        #endif
++        dispatch_source_cancel(pTimer->timer);
++        dispatch_release(pTimer->timer);
+     }
+ }
+ 
+@@ -208,8 +185,6 @@ bool IotClock_TimerArm( IotTimer_t * pTimer,
+                         uint32_t relativeTimeoutMs,
+                         uint32_t periodMs )
+ {
+-    bool status = true;
+-
+     /* Get the handle to a global concurrent queue. Work will be submitted to
+      * this queue. */
+     dispatch_queue_t globalDispatchQueue = dispatch_get_global_queue( QOS_CLASS_DEFAULT, 0 );
+@@ -218,31 +193,35 @@ bool IotClock_TimerArm( IotTimer_t * pTimer,
+     int64_t delta = ( int64_t ) relativeTimeoutMs * NANOSECONDS_PER_MILLISECOND;
+     dispatch_time_t timeout = dispatch_time( DISPATCH_TIME_NOW, delta );
+ 
+-    /* Save the period. */
+-    pTimer->periodMs = periodMs;
+-
+     /* Cancel any timer work that may already be scheduled (in case this call
+      * is a reschedule of an existing timer). */
+     IotClock_TimerDestroy( pTimer );
+ 
+-    /* Create a dispatch block to execute work on behalf of the timer. */
+-    pTimer->dispatchBlock = dispatch_block_create( 0, ^ {
+-        _timerExpirationWrapper( pTimer );
+-    } );
+-
+-    if( pTimer->dispatchBlock == NULL )
+-    {
+-        IotLogError( "Failed to create timer dispatch block." );
+-
+-        status = false;
+-    }
+-    else
+-    {
+-        /* Schedule the timer expiration to run at the timeout. */
+-        dispatch_after( timeout, globalDispatchQueue, pTimer->dispatchBlock );
++    /* Create a dispatch source to execute work on behalf of the timer. */
++    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, globalDispatchQueue);
++    if (!timer) {
++        IotLogError( "Failed to create source for new timer %p.", pTimer );
++        return false;
+     }
++    pTimer->timer = timer;
++
++    /* Set up event handler */ 
++    IotThreadRoutine_t threadRoutine = pTimer->threadRoutine;
++    void *pArgument = pTimer->pArgument;
++    dispatch_source_set_event_handler(pTimer->timer, ^{
++            /* one-shot if periodMs is zero */
++            if (!periodMs)
++            {
++                dispatch_source_cancel(timer);
++            }
++            threadRoutine(pArgument);
++        });
++
++    /* Schedule the timer expiration to run at the timeout. */
++    dispatch_source_set_timer(pTimer->timer, timeout, periodMs * NANOSECONDS_PER_MILLISECOND, 0);
++    dispatch_resume(pTimer->timer);
+ 
+-    return status;
++    return true;
+ }
+ 
+ /*-----------------------------------------------------------*/

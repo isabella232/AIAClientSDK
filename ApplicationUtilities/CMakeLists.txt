@@ -1,0 +1,6 @@
+add_subdirectory("aiaalerttonesynthesizer")
+add_subdirectory("aiaclient")
+add_subdirectory("aiaportaudiomicrophone")
+add_subdirectory("aiaopusdecoder")
+add_subdirectory("aiaportaudiospeaker")
+add_subdirectory("aiahttpclient")
