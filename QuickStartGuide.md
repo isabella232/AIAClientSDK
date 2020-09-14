@@ -58,7 +58,7 @@ cd <workspace>
 mkdir iotBuild
 git clone https://github.com/aws/aws-iot-device-sdk-embedded-C.git
 cd aws-iot-device-sdk-embedded-C
-git checkout v4_beta
+git checkout v4_beta_deprecated
 cd ../iotBuild
 cmake ../aws-iot-device-sdk-embedded-C
 make
@@ -210,7 +210,7 @@ PA_ALSA_PLUGHW=1 ./aia_demo <iot_endpoint> <workspace>/certs/AmazonRootCA1.pem <
 - `YOUR_AIA_CLIENT_ID` should be the name you have given to the AWS IoT Thing created in Section 7.1.
 - `YOUR_AWS_ACCOUNT_ID` is the `account ID` you have used in Section 5.1
 
-**Note:** Arguments are borrowed from the AWS IoT Device SDK's demo. See [their documentation for a better explanation of required demo arguments](https://github.com/aws/aws-iot-device-sdk-embedded-C/tree/v4_beta). It may be worth it to run the AWS IoT demo first after building it as a dependency of this SDK to verify that you have correctly configured it.
+**Note:** Arguments are borrowed from the AWS IoT Device SDK's demo. See [their documentation for a better explanation of required demo arguments](https://github.com/aws/aws-iot-device-sdk-embedded-C/tree/v4_beta_deprecated). It may be worth it to run the AWS IoT demo first after building it as a dependency of this SDK to verify that you have correctly configured it.
 
 **Note:** The sample app is a reference application written around the main component that applications are expected to use for AIA communication: `AiaClient_t`.
 
