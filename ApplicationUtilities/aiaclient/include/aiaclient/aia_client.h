@@ -223,7 +223,7 @@ bool AiaClient_AdjustVolume( AiaClient_t* aiaClient, int8_t delta );
  * @return @c true if the interaction began successfully or @c false otherwise.
  */
 bool AiaClient_HoldToTalkStart( AiaClient_t* aiaClient,
-                                AiaBinaryAudioStreamOffset_t index );
+                                AiaDataStreamIndex_t index );
 
 /**
  * Ends a hold to talk interaction by stopping the streaming of audio data sent
@@ -250,7 +250,7 @@ void AiaClient_CloseMicrophone( AiaClient_t* aiaClient );
  * https://developer.amazon.com/docs/alexa-voice-service/audio-hardware-configurations.html#asr
  */
 bool AiaClient_TapToTalkStart( AiaClient_t* aiaClient,
-                               AiaBinaryAudioStreamOffset_t index,
+                               AiaDataStreamIndex_t index,
                                AiaMicrophoneProfile_t profile );
 
 /* TODO: ADSER-1628 Add Metadata support */
@@ -275,8 +275,8 @@ bool AiaClient_TapToTalkStart( AiaClient_t* aiaClient,
  * https://developer.amazon.com/docs/alexa-voice-service/audio-hardware-configurations.html#asr
  */
 bool AiaClient_WakeWordStart( AiaClient_t* aiaClient,
-                              AiaBinaryAudioStreamOffset_t beginIndex,
-                              AiaBinaryAudioStreamOffset_t endIndex,
+                              AiaDataStreamIndex_t beginIndex,
+                              AiaDataStreamIndex_t endIndex,
                               AiaMicrophoneProfile_t profile,
                               const char* wakeWord );
 #endif

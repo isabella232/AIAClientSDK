@@ -58,29 +58,29 @@ struct AiaAlertManager
     AiaListDouble_t allAlerts;
 
     /** Used to keep track of the number of UX state
-     * changes by the @c speakerBufferAndUXStateTimer */
+     * changes by the @c offlineAlertPlayOrStatusCheckTimer */
     uint32_t numStateChanges;
 
     /** Used to keep track of the last known UX state
-     * by the @c speakerBufferAndUXStateTimer */
+     * by the @c offlineAlertPlayOrStatusCheckTimer */
     AiaUXState_t lastUXState;
 
     /** Used to keep track of the current UX state
-     * by the @c speakerBufferAndUXStateTimer */
+     * by the @c offlineAlertPlayOrStatusCheckTimer */
     AiaUXState_t currentUXState;
 
 #ifdef AIA_ENABLE_SPEAKER
     /** Used to keep track of the number of underruns per each iteration of the
-     * @c speakerBufferAndUXStateTimer. It gets reset in between
-     * invocations of the @c speakerBufferAndUXStateTimer. */
+     * @c offlineAlertPlayOrStatusCheckTimer. It gets reset in between
+     * invocations of the @c offlineAlertPlayOrStatusCheckTimer. */
     uint32_t numUnderruns;
 
     /** Used to keep track of the last known buffer state by the @c
-     * speakerBufferAndUXStateTimer */
+     * offlineAlertPlayOrStatusCheckTimer */
     AiaSpeakerManagerBufferState_t lastBufferState;
 
     /** Used to keep track of the current buffer state by the @c
-     * speakerBufferAndUXStateTimer */
+     * offlineAlertPlayOrStatusCheckTimer */
     AiaSpeakerManagerBufferState_t currentBufferState;
 #endif
 
@@ -120,15 +120,14 @@ struct AiaAlertManager
     /** User data to pass to @c disconnectCb. */
     void* const disconnectCbUserData;
 
-    /** Used to schedule jobs to start playing the offline alerts */
-    AiaTimer_t offlineAlertTimer;
-
-    /** Used to check the state of the speaker buffer (if @c AIA_ENABLE_SPEAKER
-     * is defined) and the UX state every @c
-     * AIA_OFFLINE_ALERT_STATUS_CHECK_CADENCE_MS seconds to decide if the device
+    /** Used for two different purposes at every @c
+     * AIA_OFFLINE_ALERT_STATUS_CHECK_CADENCE_MS seconds:
+     * - Check if we should start playing the offline alerts.
+     * - Otherwise, check if the state of the speaker buffer (if @c
+     * AIA_ENABLE_SPEAKER is defined) and the UX state to decide if the device
      * should disconnect and start playing offline alerts.
      */
-    AiaTimer_t speakerBufferAndUXStateTimer;
+    AiaTimer_t offlineAlertPlayOrStatusCheckTimer;
 
     /** Used to publish outbound messages. Methods of this object are
      * thread-safe. */
@@ -258,23 +257,18 @@ static int32_t AiaAlertScheduledTimeComparator(
 }
 
 /**
- * This is a recurring function that triggers the playback of the next offline
- * alert.
+ * This is a recurring function that occurs at @c
+ * AIA_OFFLINE_ALERT_STATUS_CHECK_CADENCE_MS intervals after the projected start
+ * time of an offline alert and it checks for two things:
+ * - Whether we should be playing an offline alert. If so, start the offline
+ * alert playback routine.
+ * - Otherwise, check the speaker buffer state (if @c AIA_ENABLE_SPEAKER is
+ * defined) for underruns and the UX state; and disconnect from the service if
+ * necessary.
  *
  * @param context User data associated with this routine.
  */
-static void AiaAlertManager_PlayOfflineAlert( void* context );
-
-/**
- * This is a recurring function that occurs at
- * @c AIA_OFFLINE_ALERT_STATUS_CHECK_CADENCE_MS that checks
- * the speaker buffer state (if @c AIA_ENABLE_SPEAKER
- * is defined) for underruns and the UX state; and disconnects from
- * the service as needed.
- *
- * @param context User data associated with this routine.
- */
-static void AiaAlertManager_CheckSpeakerBufferAndUXState( void* context );
+static void AiaAlertManager_PlayOfflineAlertOrCheckStatus( void* context );
 
 /**
  * An internal helper function to check the speaker buffer state for underruns
@@ -361,7 +355,7 @@ AiaAlertManager_t* AiaAlertManager_Create(
     if( !AiaMutex( Create )( &alertManager->mutex, false ) )
     {
         AiaLogError( "AiaMutex( Create ) failed." );
-        AiaFree( alertManager );
+        AiaAlertManager_Destroy( alertManager );
         return NULL;
     }
 
@@ -393,32 +387,21 @@ AiaAlertManager_t* AiaAlertManager_Create(
     alertManager->currentUXState = AIA_UX_IDLE;
     alertManager->lastUXState = AIA_UX_IDLE;
 
-    if( !AiaTimer( Create )( &alertManager->speakerBufferAndUXStateTimer,
-                             AiaAlertManager_CheckSpeakerBufferAndUXState,
-                             alertManager ) )
-    {
-        AiaLogError( "AiaTimer( Create ) failed" );
-        AiaFree( alertManager );
-        return NULL;
-    }
-
     /* Load alerts from persistent storage */
     size_t allAlertsBytes = AiaGetAlertsSize();
     uint8_t* allAlertsBuffer = AiaCalloc( 1, allAlertsBytes );
     if( !allAlertsBuffer )
     {
         AiaLogError( "AiaCalloc failed, bytes=%zu.", allAlertsBytes );
-        AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
-        AiaFree( alertManager );
+        AiaAlertManager_Destroy( alertManager );
         return NULL;
     }
 
     if( !AiaLoadAlerts( allAlertsBuffer, allAlertsBytes ) )
     {
         AiaLogError( "AiaLoadBlob failed" );
-        AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
         AiaFree( allAlertsBuffer );
-        AiaFree( alertManager );
+        AiaAlertManager_Destroy( alertManager );
         return NULL;
     }
 
@@ -439,9 +422,8 @@ AiaAlertManager_t* AiaAlertManager_Create(
                            &allAlertsBuffer[ bytePosition ] ) )
         {
             AiaLogError( "AiaLoadAlert failed" );
-            AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
             AiaFree( allAlertsBuffer );
-            AiaFree( alertManager );
+            AiaAlertManager_Destroy( alertManager );
             return NULL;
         }
 
@@ -459,9 +441,8 @@ AiaAlertManager_t* AiaAlertManager_Create(
         {
             AiaLogError( "AiaCalloc failed, bytes=%zu",
                          sizeof( AiaAlertSlot_t ) );
-            AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
             AiaFree( allAlertsBuffer );
-            AiaFree( alertManager );
+            AiaAlertManager_Destroy( alertManager );
             return NULL;
         }
         AiaListDouble( Link_t ) defaultLink = AiaListDouble( LINK_INITIALIZER );
@@ -475,13 +456,15 @@ AiaAlertManager_t* AiaAlertManager_Create(
                                        AiaAlertScheduledTimeComparator );
     }
 
-    if( !AiaTimer( Create )( &alertManager->offlineAlertTimer,
-                             AiaAlertManager_PlayOfflineAlert, alertManager ) )
+    /* Free the @c allAlertsBuffer as we don't need it anymore. */
+    AiaFree( allAlertsBuffer );
+
+    if( !AiaTimer( Create )( &alertManager->offlineAlertPlayOrStatusCheckTimer,
+                             AiaAlertManager_PlayOfflineAlertOrCheckStatus,
+                             alertManager ) )
     {
         AiaLogError( "AiaTimer( Create ) failed" );
-        AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
-        AiaFree( allAlertsBuffer );
-        AiaFree( alertManager );
+        AiaAlertManager_Destroy( alertManager );
         return NULL;
     }
 
@@ -489,14 +472,10 @@ AiaAlertManager_t* AiaAlertManager_Create(
     if( !AiaAlertManager_UpdateAlertManagerTime( alertManager, now ) )
     {
         AiaLogError( "AiaAlertManager_UpdateAlertManagerTime failed" );
-        AiaTimer( Destroy )( &alertManager->offlineAlertTimer );
-        AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
-        AiaFree( allAlertsBuffer );
-        AiaFree( alertManager );
+        AiaAlertManager_Destroy( alertManager );
         return NULL;
     }
 
-    AiaFree( allAlertsBuffer );
     return alertManager;
 }
 
@@ -1280,9 +1259,7 @@ void AiaAlertManager_Destroy( AiaAlertManager_t* alertManager )
         return;
     }
 
-    AiaTimer( Destroy )( &alertManager->offlineAlertTimer );
-
-    AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
+    AiaTimer( Destroy )( &alertManager->offlineAlertPlayOrStatusCheckTimer );
 
     AiaMutex( Lock )( &alertManager->mutex );
 
@@ -1498,9 +1475,9 @@ static bool AiaAlertManager_UpdateOfflineAlertTimersLocked(
     AiaAlertManager_t* alertManager, AiaTimepointSeconds_t currentTime )
 {
     /* Cancel the existing periodic offline alert related timers */
-    AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
-    if( !AiaTimer( Create )( &alertManager->speakerBufferAndUXStateTimer,
-                             AiaAlertManager_CheckSpeakerBufferAndUXState,
+    AiaTimer( Destroy )( &alertManager->offlineAlertPlayOrStatusCheckTimer );
+    if( !AiaTimer( Create )( &alertManager->offlineAlertPlayOrStatusCheckTimer,
+                             AiaAlertManager_PlayOfflineAlertOrCheckStatus,
                              alertManager ) )
     {
         AiaLogError( "AiaTimer( Create ) failed" );
@@ -1523,29 +1500,18 @@ static bool AiaAlertManager_UpdateOfflineAlertTimersLocked(
                 ( offlineAlertTime - currentTime ) * AIA_MS_PER_SECOND;
         }
 
-        /* Update the offline alert timer */
-        AiaLogDebug( "Setting the offline alert timer for %" PRIu32
-                     " milliseconds.",
-                     durationUntilNextOfflineAlert );
-        if( !AiaTimer( Arm )( &alertManager->offlineAlertTimer,
-                              durationUntilNextOfflineAlert, 0 ) )
-        {
-            AiaLogError( "AiaTimer( Arm ) failed" );
-            AiaTimer( Destroy )( &alertManager->offlineAlertTimer );
-            return false;
-        }
-
-        /* Update the speaker buffer and UX state timer */
+        /* Update the @c offlineAlertPlayOrStatusCheckTimer timer */
         AiaLogDebug(
-            "Setting the speaker buffer and UX state timer for "
+            "Setting the offlineAlertPlayOrStatusCheckTimer for "
             "%" PRIu32 " milliseconds.",
             durationUntilNextOfflineAlert );
-        if( !AiaTimer( Arm )( &alertManager->speakerBufferAndUXStateTimer,
+        if( !AiaTimer( Arm )( &alertManager->offlineAlertPlayOrStatusCheckTimer,
                               durationUntilNextOfflineAlert,
                               AIA_OFFLINE_ALERT_STATUS_CHECK_CADENCE_MS ) )
         {
             AiaLogError( "AiaTimer( Arm ) failed" );
-            AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
+            AiaTimer( Destroy )(
+                &alertManager->offlineAlertPlayOrStatusCheckTimer );
             return false;
         }
 #ifdef AIA_ENABLE_SPEAKER
@@ -1560,7 +1526,7 @@ static bool AiaAlertManager_UpdateOfflineAlertTimersLocked(
     return true;
 }
 
-static void AiaAlertManager_PlayOfflineAlert( void* context )
+static void AiaAlertManager_PlayOfflineAlertOrCheckStatus( void* context )
 {
     AiaAlertManager_t* alertManager = (AiaAlertManager_t*)context;
     AiaAssert( alertManager );
@@ -1582,17 +1548,6 @@ static void AiaAlertManager_PlayOfflineAlert( void* context )
           currentUXState != AIA_UX_THINKING &&
           currentUXState != AIA_UX_ALERTING ) )
     {
-        /* Cancel the existing periodic offline alert related timers */
-        AiaTimer( Destroy )( &alertManager->speakerBufferAndUXStateTimer );
-        if( !AiaTimer( Create )( &alertManager->speakerBufferAndUXStateTimer,
-                                 AiaAlertManager_CheckSpeakerBufferAndUXState,
-                                 alertManager ) )
-        {
-            AiaLogError( "AiaTimer( Create ) failed" );
-            AiaMutex( Unlock )( &alertManager->mutex );
-            return;
-        }
-
         /* Get the information about the first available alert if we have any */
         if( !AiaListDouble( Count )( &alertManager->allAlerts ) )
         {
@@ -1626,8 +1581,25 @@ static void AiaAlertManager_PlayOfflineAlert( void* context )
     }
     else
     {
-        AiaLogDebug( "Not playing the offline alert" );
+        AiaLogDebug(
+            "Not playing the offline alert, check if we should be "
+            "disconnecting from the service" );
+        bool shouldDisconnect =
+            AiaAlertManager_CheckSpeakerBufferAndUXStateLocked( alertManager );
         AiaMutex( Unlock )( &alertManager->mutex );
+        if( shouldDisconnect )
+        {
+            /* Call the disconnect callback */
+            AiaLogDebug(
+                "Disconnecting from service due to being in underrun state "
+                "longer than the threshold!" );
+            if( !alertManager->disconnectCb(
+                    alertManager->disconnectCbUserData,
+                    AIA_CONNECTION_ON_DISCONNECTED_GOING_OFFLINE, NULL ) )
+            {
+                AiaLogError( "Failed to disconnect" );
+            }
+        }
     }
 #endif
 }
@@ -1649,8 +1621,8 @@ static bool AiaAlertManager_CheckSpeakerBufferAndUXStateLocked(
     alertManager->lastBufferState = alertManager->currentBufferState;
 #endif
 
-    if( !shouldDisconnect && alertManager->lastUXState == AIA_UX_THINKING &&
-        alertManager->currentUXState == AIA_UX_THINKING &&
+    if( !shouldDisconnect && alertManager->lastUXState == AIA_UX_ALERTING &&
+        alertManager->currentUXState == AIA_UX_ALERTING &&
         alertManager->numStateChanges == 0 )
     {
         shouldDisconnect = true;
@@ -1660,35 +1632,6 @@ static bool AiaAlertManager_CheckSpeakerBufferAndUXStateLocked(
     alertManager->lastUXState = alertManager->currentUXState;
 
     return shouldDisconnect;
-}
-
-static void AiaAlertManager_CheckSpeakerBufferAndUXState( void* context )
-{
-    AiaAlertManager_t* alertManager = (AiaAlertManager_t*)context;
-    AiaAssert( alertManager );
-    if( !alertManager )
-    {
-        AiaLogError( "Null alertManager" );
-        AiaCriticalFailure();
-        return;
-    }
-    AiaMutex( Lock )( &alertManager->mutex );
-    bool shouldDisconnect =
-        AiaAlertManager_CheckSpeakerBufferAndUXStateLocked( alertManager );
-    AiaMutex( Unlock )( &alertManager->mutex );
-    if( shouldDisconnect )
-    {
-        /* Call the disconnect callback */
-        AiaLogDebug(
-            "Disconnecting from service due to being in underrun state longer "
-            "than the threshold!" );
-        if( !alertManager->disconnectCb(
-                alertManager->disconnectCbUserData,
-                AIA_CONNECTION_ON_DISCONNECTED_GOING_OFFLINE, NULL ) )
-        {
-            AiaLogError( "Failed to disconnect" );
-        }
-    }
 }
 
 bool AiaAlertManager_DeleteAlert( AiaAlertManager_t* alertManager,

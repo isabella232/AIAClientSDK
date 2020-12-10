@@ -91,8 +91,7 @@ void AiaMicrophonerManager_Destroy( AiaMicrophoneManager_t* microphoneManager );
  * begin streaming from.
  */
 bool AiaMicrophoneManager_HoldToTalkStart(
-    AiaMicrophoneManager_t* microphoneManager,
-    AiaBinaryAudioStreamOffset_t index );
+    AiaMicrophoneManager_t* microphoneManager, AiaDataStreamIndex_t index );
 
 /**
  * Ends a hold to talk interaction by stopping the streaming of audio data sent
@@ -119,8 +118,8 @@ void AiaMicrophoneManager_CloseMicrophone(
  * https://developer.amazon.com/docs/alexa-voice-service/audio-hardware-configurations.html#asr
  */
 bool AiaMicrophoneManager_TapToTalkStart(
-    AiaMicrophoneManager_t* microphoneManager,
-    AiaBinaryAudioStreamOffset_t index, AiaMicrophoneProfile_t profile );
+    AiaMicrophoneManager_t* microphoneManager, AiaDataStreamIndex_t index,
+    AiaMicrophoneProfile_t profile );
 
 /* TODO: ADSER-1628 Add Metadata support */
 /**
@@ -142,9 +141,8 @@ bool AiaMicrophoneManager_TapToTalkStart(
  * https://developer.amazon.com/docs/alexa-voice-service/audio-hardware-configurations.html#asr
  */
 bool AiaMicrophoneManager_WakeWordStart(
-    AiaMicrophoneManager_t* microphoneManager,
-    AiaBinaryAudioStreamOffset_t beginIndex,
-    AiaBinaryAudioStreamOffset_t endIndex, AiaMicrophoneProfile_t profile,
+    AiaMicrophoneManager_t* microphoneManager, AiaDataStreamIndex_t beginIndex,
+    AiaDataStreamIndex_t endIndex, AiaMicrophoneProfile_t profile,
     const char* wakeWord );
 
 #endif /* ifndef AIA_MICROPHONE_MANAGER_H_ */

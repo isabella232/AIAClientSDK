@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.11.0 FATAL_ERROR)
 
 # Set project information
-project(AiaClientSDK VERSION 1.0.0 LANGUAGES C)
+project(AiaClientSDK VERSION 1.0.1 LANGUAGES C)
 set(PROJECT_BRIEF "A cross-platform SDK for interacting with the AVS for AWS IoT Core")
 
 # Installation paths

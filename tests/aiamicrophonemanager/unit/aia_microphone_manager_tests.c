@@ -54,7 +54,8 @@
 static const char* TEST_SALT = "TestSalt";
 static const size_t TEST_SALT_LENGTH = sizeof( TEST_SALT ) - 1;
 
-static AiaBinaryAudioStreamOffset_t getOffsetFromData( const uint8_t* data )
+static AiaBinaryAudioStreamOffset_t getStreamOffsetFromData(
+    const uint8_t* data )
 {
     AiaBinaryAudioStreamOffset_t offset = 0;
     for( size_t i = 0; i < sizeof( AiaBinaryAudioStreamOffset_t ); ++i )
@@ -301,11 +302,11 @@ TEST( AiaMicrophoneManagerTests, Creation )
 
 TEST( AiaMicrophoneManagerTests, HoldToTalkFollowedByLocalEnd )
 {
-    AiaBinaryAudioStreamOffset_t TEST_INDEX_START = 500;
-    AiaBinaryAudioStreamOffset_t serviceFacingOffset = 0;
+    const AiaDataStreamIndex_t BUFFER_START_INDEX = 500;
+    AiaBinaryAudioStreamOffset_t streamOffset = 0;
 
     TEST_ASSERT_TRUE( AiaMicrophoneManager_HoldToTalkStart(
-        microphoneManager, TEST_INDEX_START ) );
+        microphoneManager, BUFFER_START_INDEX ) );
     TEST_ASSERT_TRUE(
         AiaSemaphore( TryWait )( &testObserver->currentStateChanged ) );
     TEST_ASSERT_EQUAL( testObserver->currentState, AIA_MICROPHONE_STATE_OPEN );
@@ -343,7 +344,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkFollowedByLocalEnd )
         strlen( AIA_MICROPHONE_OPENED_OFFSET_KEY ), &microphoneOpenedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneOpenedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), streamOffset );
 
     const char* initiator = NULL;
     size_t initiatorLen;
@@ -365,11 +366,11 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkFollowedByLocalEnd )
                                   type, typeLen );
 
     size_t numIterationsUntilStop = 4;
-    AiaBinaryAudioStreamOffset_t TEST_STOP_INDEX =
-        TEST_INDEX_START +
+    const AiaDataStreamIndex_t BUFFER_STOP_INDEX =
+        BUFFER_START_INDEX +
         ( numIterationsUntilStop * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
-    AiaBinaryAudioStreamOffset_t currentPublishedIndex = TEST_INDEX_START;
-    while( currentPublishedIndex < TEST_STOP_INDEX )
+    AiaDataStreamIndex_t bufferCurrentIndex = BUFFER_START_INDEX;
+    while( bufferCurrentIndex < BUFFER_STOP_INDEX )
     {
         TEST_ASSERT_TRUE( AiaSemaphore( TimedWait )(
             &g_mockMicrophoneRegulator->writeSemaphore,
@@ -391,7 +392,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkFollowedByLocalEnd )
                                  AIA_MICROPHONE_BUFFER_WORD_SIZE ) );
         const uint8_t* data = AiaBinaryMessage_GetData( binaryMessage );
         TEST_ASSERT_NOT_NULL( data );
-        TEST_ASSERT_EQUAL( getOffsetFromData( data ), serviceFacingOffset );
+        TEST_ASSERT_EQUAL( getStreamOffsetFromData( data ), streamOffset );
         size_t dataLenInBytes = AiaBinaryMessage_GetLength( binaryMessage ) -
                                 sizeof( AiaBinaryAudioStreamOffset_t );
 
@@ -399,11 +400,11 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkFollowedByLocalEnd )
             (const uint16_t*)( data + sizeof( AiaBinaryAudioStreamOffset_t ) );
         for( size_t i = 0; i < AIA_MICROPHONE_CHUNK_SIZE_SAMPLES; ++i )
         {
-            TEST_ASSERT_EQUAL( dataInSamples[ i ], currentPublishedIndex + i );
+            TEST_ASSERT_EQUAL( dataInSamples[ i ], bufferCurrentIndex + i );
         }
 
-        serviceFacingOffset += dataLenInBytes;
-        currentPublishedIndex +=
+        streamOffset += dataLenInBytes;
+        bufferCurrentIndex +=
             ( dataLenInBytes / AIA_MICROPHONE_BUFFER_WORD_SIZE );
     }
 
@@ -432,17 +433,17 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkFollowedByLocalEnd )
         strlen( AIA_MICROPHONE_CLOSED_OFFSET_KEY ), &microphoneClosedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneClosedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), streamOffset );
 }
 
 TEST( AiaMicrophoneManagerTests, TapToTalkFollowedByCloseMicrophone )
 {
     AiaMicrophoneProfile_t TEST_PROFILE = AIA_MICROPHONE_PROFILE_NEAR_FIELD;
-    AiaBinaryAudioStreamOffset_t TEST_INDEX_START = 500;
-    AiaBinaryAudioStreamOffset_t serviceFacingOffset = 0;
+    const AiaDataStreamIndex_t BUFFER_START_INDEX = 500;
+    AiaBinaryAudioStreamOffset_t streamOffset = 0;
 
     TEST_ASSERT_TRUE( AiaMicrophoneManager_TapToTalkStart(
-        microphoneManager, TEST_INDEX_START, TEST_PROFILE ) );
+        microphoneManager, BUFFER_START_INDEX, TEST_PROFILE ) );
     TEST_ASSERT_TRUE(
         AiaSemaphore( TryWait )( &testObserver->currentStateChanged ) );
     TEST_ASSERT_EQUAL( testObserver->currentState, AIA_MICROPHONE_STATE_OPEN );
@@ -479,7 +480,7 @@ TEST( AiaMicrophoneManagerTests, TapToTalkFollowedByCloseMicrophone )
         strlen( AIA_MICROPHONE_OPENED_OFFSET_KEY ), &microphoneOpenedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneOpenedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), streamOffset );
 
     const char* initiator = NULL;
     size_t initiatorLen;
@@ -500,10 +501,10 @@ TEST( AiaMicrophoneManagerTests, TapToTalkFollowedByCloseMicrophone )
                                       AIA_MICROPHONE_INITIATOR_TYPE_TAP ),
                                   type, typeLen );
 
-    AiaBinaryAudioStreamOffset_t TEST_STOP_INDEX =
-        TEST_INDEX_START + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
-    AiaBinaryAudioStreamOffset_t currentPublishedIndex = TEST_INDEX_START;
-    while( currentPublishedIndex < TEST_STOP_INDEX )
+    const AiaDataStreamIndex_t BUFFER_STOP_INDEX =
+        BUFFER_START_INDEX + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
+    AiaDataStreamIndex_t bufferCurrentIndex = BUFFER_START_INDEX;
+    while( bufferCurrentIndex < BUFFER_STOP_INDEX )
     {
         TEST_ASSERT_TRUE( AiaSemaphore( TimedWait )(
             &g_mockMicrophoneRegulator->writeSemaphore,
@@ -525,7 +526,7 @@ TEST( AiaMicrophoneManagerTests, TapToTalkFollowedByCloseMicrophone )
                                  AIA_MICROPHONE_BUFFER_WORD_SIZE ) );
         const uint8_t* data = AiaBinaryMessage_GetData( binaryMessage );
         TEST_ASSERT_NOT_NULL( data );
-        TEST_ASSERT_EQUAL( getOffsetFromData( data ), serviceFacingOffset );
+        TEST_ASSERT_EQUAL( getStreamOffsetFromData( data ), streamOffset );
         size_t dataLenInBytes = AiaBinaryMessage_GetLength( binaryMessage ) -
                                 sizeof( AiaBinaryAudioStreamOffset_t );
 
@@ -533,11 +534,11 @@ TEST( AiaMicrophoneManagerTests, TapToTalkFollowedByCloseMicrophone )
             (const uint16_t*)( data + sizeof( AiaBinaryAudioStreamOffset_t ) );
         for( size_t i = 0; i < AIA_MICROPHONE_CHUNK_SIZE_SAMPLES; ++i )
         {
-            TEST_ASSERT_EQUAL( dataInSamples[ i ], currentPublishedIndex + i );
+            TEST_ASSERT_EQUAL( dataInSamples[ i ], bufferCurrentIndex + i );
         }
 
-        serviceFacingOffset += dataLenInBytes;
-        currentPublishedIndex +=
+        streamOffset += dataLenInBytes;
+        bufferCurrentIndex +=
             ( dataLenInBytes / AIA_MICROPHONE_BUFFER_WORD_SIZE );
     }
 
@@ -567,22 +568,22 @@ TEST( AiaMicrophoneManagerTests, TapToTalkFollowedByCloseMicrophone )
         strlen( AIA_MICROPHONE_CLOSED_OFFSET_KEY ), &microphoneClosedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneClosedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), streamOffset );
 }
 
 TEST( AiaMicrophoneManagerTests, WakeWordFollowedByCloseMicrophone )
 {
     AiaMicrophoneProfile_t TEST_PROFILE = AIA_MICROPHONE_PROFILE_FAR_FIELD;
-    AiaBinaryAudioStreamOffset_t TEST_WW_INDEX_START = 8000;
-    AiaBinaryAudioStreamOffset_t TEST_WW_INDEX_END = 16000;
-    AiaBinaryAudioStreamOffset_t serviceFacingOffset = 0;
-
-    AiaBinaryAudioStreamOffset_t TEST_INDEX_START =
-        TEST_WW_INDEX_START - AIA_MICROPHONE_WAKE_WORD_PREROLL_IN_SAMPLES;
+    const AiaDataStreamIndex_t BUFFER_START_INDEX = 500;
+    const AiaDataStreamIndex_t WW_BUFFER_START_INDEX =
+        BUFFER_START_INDEX + AIA_MICROPHONE_WAKE_WORD_PREROLL_IN_SAMPLES;
+    const AiaBinaryAudioStreamOffset_t WW_BUFFER_END_INDEX =
+        WW_BUFFER_START_INDEX + 8000;
+    AiaBinaryAudioStreamOffset_t streamOffset = 0;
 
     TEST_ASSERT_TRUE( AiaMicrophoneManager_WakeWordStart(
-        microphoneManager, TEST_WW_INDEX_START, TEST_WW_INDEX_END, TEST_PROFILE,
-        AIA_ALEXA_WAKE_WORD ) );
+        microphoneManager, WW_BUFFER_START_INDEX, WW_BUFFER_END_INDEX,
+        TEST_PROFILE, AIA_ALEXA_WAKE_WORD ) );
     TEST_ASSERT_TRUE(
         AiaSemaphore( TryWait )( &testObserver->currentStateChanged ) );
     TEST_ASSERT_EQUAL( testObserver->currentState, AIA_MICROPHONE_STATE_OPEN );
@@ -619,7 +620,7 @@ TEST( AiaMicrophoneManagerTests, WakeWordFollowedByCloseMicrophone )
         strlen( AIA_MICROPHONE_OPENED_OFFSET_KEY ), &microphoneOpenedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneOpenedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), streamOffset );
 
     const char* initiator = NULL;
     size_t initiatorLen = 0;
@@ -679,8 +680,10 @@ TEST( AiaMicrophoneManagerTests, WakeWordFollowedByCloseMicrophone )
             AIA_MICROPHONE_OPENED_INITIATOR_PAYLOAD_WAKE_WORD_INDICES_BEGIN_OFFSET_KEY ),
         &wakeWordBeginOffset, NULL ) );
     TEST_ASSERT_NOT_NULL( wakeWordBeginOffset );
-    TEST_ASSERT_EQUAL( atoi( wakeWordBeginOffset ),
-                       TEST_WW_INDEX_START * AIA_MICROPHONE_BUFFER_WORD_SIZE );
+    TEST_ASSERT_EQUAL(
+        ( streamOffset + ( ( WW_BUFFER_START_INDEX - BUFFER_START_INDEX ) *
+                           AIA_MICROPHONE_BUFFER_WORD_SIZE ) ),
+        atoi( wakeWordBeginOffset ) );
 
     const char* wakeWordEndOffset = NULL;
     TEST_ASSERT_TRUE( AiaFindJsonValue(
@@ -690,13 +693,15 @@ TEST( AiaMicrophoneManagerTests, WakeWordFollowedByCloseMicrophone )
             AIA_MICROPHONE_OPENED_INITIATOR_PAYLOAD_WAKE_WORD_INDICES_END_OFFSET_KEY ),
         &wakeWordEndOffset, NULL ) );
     TEST_ASSERT_NOT_NULL( wakeWordEndOffset );
-    TEST_ASSERT_EQUAL( atoi( wakeWordEndOffset ),
-                       TEST_WW_INDEX_END * AIA_MICROPHONE_BUFFER_WORD_SIZE );
+    TEST_ASSERT_EQUAL(
+        ( streamOffset + WW_BUFFER_END_INDEX - BUFFER_START_INDEX ) *
+            AIA_MICROPHONE_BUFFER_WORD_SIZE,
+        atoi( wakeWordEndOffset ) );
 
-    AiaBinaryAudioStreamOffset_t TEST_STOP_INDEX =
-        TEST_INDEX_START + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
-    AiaBinaryAudioStreamOffset_t currentPublishedIndex = TEST_INDEX_START;
-    while( currentPublishedIndex < TEST_STOP_INDEX )
+    const AiaBinaryAudioStreamOffset_t BUFFER_STOP_INDEX =
+        BUFFER_START_INDEX + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
+    AiaBinaryAudioStreamOffset_t bufferCurrentIndex = BUFFER_START_INDEX;
+    while( bufferCurrentIndex < BUFFER_STOP_INDEX )
     {
         TEST_ASSERT_TRUE( AiaSemaphore( TimedWait )(
             &g_mockMicrophoneRegulator->writeSemaphore,
@@ -718,7 +723,7 @@ TEST( AiaMicrophoneManagerTests, WakeWordFollowedByCloseMicrophone )
                                  AIA_MICROPHONE_BUFFER_WORD_SIZE ) );
         const uint8_t* data = AiaBinaryMessage_GetData( binaryMessage );
         TEST_ASSERT_NOT_NULL( data );
-        TEST_ASSERT_EQUAL( getOffsetFromData( data ), serviceFacingOffset );
+        TEST_ASSERT_EQUAL( getStreamOffsetFromData( data ), streamOffset );
         size_t dataLenInBytes = AiaBinaryMessage_GetLength( binaryMessage ) -
                                 sizeof( AiaBinaryAudioStreamOffset_t );
 
@@ -726,11 +731,11 @@ TEST( AiaMicrophoneManagerTests, WakeWordFollowedByCloseMicrophone )
             (const uint16_t*)( data + sizeof( AiaBinaryAudioStreamOffset_t ) );
         for( size_t i = 0; i < AIA_MICROPHONE_CHUNK_SIZE_SAMPLES; ++i )
         {
-            TEST_ASSERT_EQUAL( dataInSamples[ i ], currentPublishedIndex + i );
+            TEST_ASSERT_EQUAL( dataInSamples[ i ], bufferCurrentIndex + i );
         }
 
-        serviceFacingOffset += dataLenInBytes;
-        currentPublishedIndex +=
+        streamOffset += dataLenInBytes;
+        bufferCurrentIndex +=
             ( dataLenInBytes / AIA_MICROPHONE_BUFFER_WORD_SIZE );
     }
 
@@ -760,38 +765,38 @@ TEST( AiaMicrophoneManagerTests, WakeWordFollowedByCloseMicrophone )
         strlen( AIA_MICROPHONE_CLOSED_OFFSET_KEY ), &microphoneClosedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneClosedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), streamOffset );
 }
 
 TEST( AiaMicrophoneManagerTests, WakeWordNonAlexaFails )
 {
     AiaMicrophoneProfile_t TEST_PROFILE = AIA_MICROPHONE_PROFILE_FAR_FIELD;
-    AiaBinaryAudioStreamOffset_t TEST_WW_INDEX_START = 8000;
-    AiaBinaryAudioStreamOffset_t TEST_WW_INDEX_END = 16000;
+    AiaBinaryAudioStreamOffset_t WW_STREAM_OFFSET_START = 8000;
+    AiaBinaryAudioStreamOffset_t WW_STREAM_OFFSET_END = 16000;
 
     TEST_ASSERT_FALSE( AiaMicrophoneManager_WakeWordStart(
-        microphoneManager, TEST_WW_INDEX_START, TEST_WW_INDEX_END, TEST_PROFILE,
-        "SANJAY" ) );
+        microphoneManager, WW_STREAM_OFFSET_START, WW_STREAM_OFFSET_END,
+        TEST_PROFILE, "SANJAY" ) );
 }
 
 TEST( AiaMicrophoneManagerTests, WakeWordWithoutAmpleSamplesFails )
 {
     AiaMicrophoneProfile_t TEST_PROFILE = AIA_MICROPHONE_PROFILE_FAR_FIELD;
-    AiaBinaryAudioStreamOffset_t TEST_WW_INDEX_START = 8000 - 1;
-    AiaBinaryAudioStreamOffset_t TEST_WW_INDEX_END = 16000;
+    AiaBinaryAudioStreamOffset_t WW_STREAM_OFFSET_START = 8000 - 1;
+    AiaBinaryAudioStreamOffset_t WW_STREAM_OFFSET_END = 16000;
 
     TEST_ASSERT_FALSE( AiaMicrophoneManager_WakeWordStart(
-        microphoneManager, TEST_WW_INDEX_START, TEST_WW_INDEX_END, TEST_PROFILE,
-        AIA_ALEXA_WAKE_WORD ) );
+        microphoneManager, WW_STREAM_OFFSET_START, WW_STREAM_OFFSET_END,
+        TEST_PROFILE, AIA_ALEXA_WAKE_WORD ) );
 }
 
 TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneTimeout )
 {
-    AiaBinaryAudioStreamOffset_t TEST_INDEX_START = 500;
-    AiaBinaryAudioStreamOffset_t serviceFacingOffset = 0;
+    const AiaBinaryAudioStreamOffset_t BUFFER_START_INDEX = 500;
+    AiaBinaryAudioStreamOffset_t streamOffset = 0;
 
     TEST_ASSERT_TRUE( AiaMicrophoneManager_HoldToTalkStart(
-        microphoneManager, TEST_INDEX_START ) );
+        microphoneManager, BUFFER_START_INDEX ) );
     TEST_ASSERT_TRUE(
         AiaSemaphore( TryWait )( &testObserver->currentStateChanged ) );
     TEST_ASSERT_EQUAL( testObserver->currentState, AIA_MICROPHONE_STATE_OPEN );
@@ -829,7 +834,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneTimeout )
         strlen( AIA_MICROPHONE_OPENED_OFFSET_KEY ), &microphoneOpenedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneOpenedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), streamOffset );
 
     const char* initiator = NULL;
     size_t initiatorLen;
@@ -850,10 +855,10 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneTimeout )
                                       AIA_MICROPHONE_INITIATOR_TYPE_HOLD ),
                                   type, typeLen );
 
-    AiaBinaryAudioStreamOffset_t TEST_STOP_INDEX =
-        TEST_INDEX_START + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
-    AiaBinaryAudioStreamOffset_t currentPublishedIndex = TEST_INDEX_START;
-    while( currentPublishedIndex < TEST_STOP_INDEX )
+    const AiaBinaryAudioStreamOffset_t BUFFER_STOP_INDEX =
+        BUFFER_START_INDEX + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
+    AiaBinaryAudioStreamOffset_t bufferCurrentIndex = BUFFER_START_INDEX;
+    while( bufferCurrentIndex < BUFFER_STOP_INDEX )
     {
         TEST_ASSERT_TRUE( AiaSemaphore( TimedWait )(
             &g_mockMicrophoneRegulator->writeSemaphore,
@@ -875,7 +880,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneTimeout )
                                  AIA_MICROPHONE_BUFFER_WORD_SIZE ) );
         const uint8_t* data = AiaBinaryMessage_GetData( binaryMessage );
         TEST_ASSERT_NOT_NULL( data );
-        TEST_ASSERT_EQUAL( getOffsetFromData( data ), serviceFacingOffset );
+        TEST_ASSERT_EQUAL( getStreamOffsetFromData( data ), streamOffset );
         size_t dataLenInBytes = AiaBinaryMessage_GetLength( binaryMessage ) -
                                 sizeof( AiaBinaryAudioStreamOffset_t );
 
@@ -883,11 +888,11 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneTimeout )
             (const uint16_t*)( data + sizeof( AiaBinaryAudioStreamOffset_t ) );
         for( size_t i = 0; i < AIA_MICROPHONE_CHUNK_SIZE_SAMPLES; ++i )
         {
-            TEST_ASSERT_EQUAL( dataInSamples[ i ], currentPublishedIndex + i );
+            TEST_ASSERT_EQUAL( dataInSamples[ i ], bufferCurrentIndex + i );
         }
 
-        serviceFacingOffset += dataLenInBytes;
-        currentPublishedIndex +=
+        streamOffset += dataLenInBytes;
+        bufferCurrentIndex +=
             ( dataLenInBytes / AIA_MICROPHONE_BUFFER_WORD_SIZE );
     }
 
@@ -916,7 +921,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneTimeout )
         strlen( AIA_MICROPHONE_CLOSED_OFFSET_KEY ), &microphoneClosedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneClosedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), streamOffset );
 
     AiaDurationMs_t TIMEOUT = 100;
     const char* openMicrophonePayload = generateOpenMicrophone( TIMEOUT, NULL );
@@ -944,11 +949,11 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneTimeout )
 
 TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneWithinTimeout )
 {
-    AiaBinaryAudioStreamOffset_t TEST_INDEX_START = 500;
-    AiaBinaryAudioStreamOffset_t serviceFacingOffset = 0;
+    const AiaBinaryAudioStreamOffset_t BUFFER_START_INDEX = 500;
+    AiaBinaryAudioStreamOffset_t streamOffset = 0;
 
     TEST_ASSERT_TRUE( AiaMicrophoneManager_HoldToTalkStart(
-        microphoneManager, TEST_INDEX_START ) );
+        microphoneManager, BUFFER_START_INDEX ) );
     TEST_ASSERT_TRUE(
         AiaSemaphore( TryWait )( &testObserver->currentStateChanged ) );
     TEST_ASSERT_EQUAL( testObserver->currentState, AIA_MICROPHONE_STATE_OPEN );
@@ -986,7 +991,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneWithinTimeout )
         strlen( AIA_MICROPHONE_OPENED_OFFSET_KEY ), &microphoneOpenedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneOpenedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), streamOffset );
 
     const char* initiator = NULL;
     size_t initiatorLen;
@@ -1007,10 +1012,10 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneWithinTimeout )
                                       AIA_MICROPHONE_INITIATOR_TYPE_HOLD ),
                                   type, typeLen );
 
-    AiaBinaryAudioStreamOffset_t TEST_STOP_INDEX =
-        TEST_INDEX_START + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
-    AiaBinaryAudioStreamOffset_t currentPublishedIndex = TEST_INDEX_START;
-    while( currentPublishedIndex < TEST_STOP_INDEX )
+    const AiaBinaryAudioStreamOffset_t BUFFER_STOP_INDEX =
+        BUFFER_START_INDEX + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
+    AiaBinaryAudioStreamOffset_t bufferCurrentIndex = BUFFER_START_INDEX;
+    while( bufferCurrentIndex < BUFFER_STOP_INDEX )
     {
         TEST_ASSERT_TRUE( AiaSemaphore( TimedWait )(
             &g_mockMicrophoneRegulator->writeSemaphore,
@@ -1032,7 +1037,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneWithinTimeout )
                                  AIA_MICROPHONE_BUFFER_WORD_SIZE ) );
         const uint8_t* data = AiaBinaryMessage_GetData( binaryMessage );
         TEST_ASSERT_NOT_NULL( data );
-        TEST_ASSERT_EQUAL( getOffsetFromData( data ), serviceFacingOffset );
+        TEST_ASSERT_EQUAL( getStreamOffsetFromData( data ), streamOffset );
         size_t dataLenInBytes = AiaBinaryMessage_GetLength( binaryMessage ) -
                                 sizeof( AiaBinaryAudioStreamOffset_t );
 
@@ -1040,11 +1045,11 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneWithinTimeout )
             (const uint16_t*)( data + sizeof( AiaBinaryAudioStreamOffset_t ) );
         for( size_t i = 0; i < AIA_MICROPHONE_CHUNK_SIZE_SAMPLES; ++i )
         {
-            TEST_ASSERT_EQUAL( dataInSamples[ i ], currentPublishedIndex + i );
+            TEST_ASSERT_EQUAL( dataInSamples[ i ], bufferCurrentIndex + i );
         }
 
-        serviceFacingOffset += dataLenInBytes;
-        currentPublishedIndex +=
+        streamOffset += dataLenInBytes;
+        bufferCurrentIndex +=
             ( dataLenInBytes / AIA_MICROPHONE_BUFFER_WORD_SIZE );
     }
 
@@ -1073,7 +1078,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneWithinTimeout )
         strlen( AIA_MICROPHONE_CLOSED_OFFSET_KEY ), &microphoneClosedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneClosedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), streamOffset );
 
     AiaDurationMs_t TIMEOUT = 100;
     const char* openMicrophonePayload = generateOpenMicrophone( TIMEOUT, NULL );
@@ -1083,7 +1088,7 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneWithinTimeout )
         strlen( openMicrophonePayload ), 0, 0 );
 
     TEST_ASSERT_TRUE( AiaMicrophoneManager_HoldToTalkStart(
-        microphoneManager, TEST_INDEX_START ) );
+        microphoneManager, BUFFER_START_INDEX ) );
     TEST_ASSERT_TRUE(
         AiaSemaphore( TryWait )( &testObserver->currentStateChanged ) );
     TEST_ASSERT_EQUAL( testObserver->currentState, AIA_MICROPHONE_STATE_OPEN );
@@ -1110,11 +1115,11 @@ TEST( AiaMicrophoneManagerTests, HoldToTalkOpenMicrophoneWithinTimeout )
 
 TEST( AiaMicrophoneManagerTests, OpenMicrophoneWithInitiatorEchoedBack )
 {
-    AiaBinaryAudioStreamOffset_t TEST_INDEX_START = 500;
-    AiaBinaryAudioStreamOffset_t serviceFacingOffset = 0;
+    const AiaBinaryAudioStreamOffset_t BUFFER_START_INDEX = 500;
+    AiaBinaryAudioStreamOffset_t streamOffset = 0;
 
     TEST_ASSERT_TRUE( AiaMicrophoneManager_HoldToTalkStart(
-        microphoneManager, TEST_INDEX_START ) );
+        microphoneManager, BUFFER_START_INDEX ) );
     TEST_ASSERT_TRUE(
         AiaSemaphore( TryWait )( &testObserver->currentStateChanged ) );
     TEST_ASSERT_EQUAL( testObserver->currentState, AIA_MICROPHONE_STATE_OPEN );
@@ -1152,7 +1157,7 @@ TEST( AiaMicrophoneManagerTests, OpenMicrophoneWithInitiatorEchoedBack )
         strlen( AIA_MICROPHONE_OPENED_OFFSET_KEY ), &microphoneOpenedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneOpenedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneOpenedOffset ), streamOffset );
 
     const char* initiator = NULL;
     size_t initiatorLen;
@@ -1173,10 +1178,10 @@ TEST( AiaMicrophoneManagerTests, OpenMicrophoneWithInitiatorEchoedBack )
                                       AIA_MICROPHONE_INITIATOR_TYPE_HOLD ),
                                   type, typeLen );
 
-    AiaBinaryAudioStreamOffset_t TEST_STOP_INDEX =
-        TEST_INDEX_START + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
-    AiaBinaryAudioStreamOffset_t currentPublishedIndex = TEST_INDEX_START;
-    while( currentPublishedIndex < TEST_STOP_INDEX )
+    const AiaBinaryAudioStreamOffset_t BUFFER_STOP_INDEX =
+        BUFFER_START_INDEX + ( 4 * AIA_MICROPHONE_CHUNK_SIZE_SAMPLES );
+    AiaBinaryAudioStreamOffset_t bufferCurrentIndex = BUFFER_START_INDEX;
+    while( bufferCurrentIndex < BUFFER_STOP_INDEX )
     {
         TEST_ASSERT_TRUE( AiaSemaphore( TimedWait )(
             &g_mockMicrophoneRegulator->writeSemaphore,
@@ -1198,7 +1203,7 @@ TEST( AiaMicrophoneManagerTests, OpenMicrophoneWithInitiatorEchoedBack )
                                  AIA_MICROPHONE_BUFFER_WORD_SIZE ) );
         const uint8_t* data = AiaBinaryMessage_GetData( binaryMessage );
         TEST_ASSERT_NOT_NULL( data );
-        TEST_ASSERT_EQUAL( getOffsetFromData( data ), serviceFacingOffset );
+        TEST_ASSERT_EQUAL( getStreamOffsetFromData( data ), streamOffset );
         size_t dataLenInBytes = AiaBinaryMessage_GetLength( binaryMessage ) -
                                 sizeof( AiaBinaryAudioStreamOffset_t );
 
@@ -1206,11 +1211,11 @@ TEST( AiaMicrophoneManagerTests, OpenMicrophoneWithInitiatorEchoedBack )
             (const uint16_t*)( data + sizeof( AiaBinaryAudioStreamOffset_t ) );
         for( size_t i = 0; i < AIA_MICROPHONE_CHUNK_SIZE_SAMPLES; ++i )
         {
-            TEST_ASSERT_EQUAL( dataInSamples[ i ], currentPublishedIndex + i );
+            TEST_ASSERT_EQUAL( dataInSamples[ i ], bufferCurrentIndex + i );
         }
 
-        serviceFacingOffset += dataLenInBytes;
-        currentPublishedIndex +=
+        streamOffset += dataLenInBytes;
+        bufferCurrentIndex +=
             ( dataLenInBytes / AIA_MICROPHONE_BUFFER_WORD_SIZE );
     }
 
@@ -1239,7 +1244,7 @@ TEST( AiaMicrophoneManagerTests, OpenMicrophoneWithInitiatorEchoedBack )
         strlen( AIA_MICROPHONE_CLOSED_OFFSET_KEY ), &microphoneClosedOffset,
         NULL ) );
     TEST_ASSERT_NOT_NULL( microphoneClosedOffset );
-    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), serviceFacingOffset );
+    TEST_ASSERT_EQUAL( atoi( microphoneClosedOffset ), streamOffset );
 
     AiaDurationMs_t TIMEOUT = 100;
     const char* TEST_INITIATOR = "{ SANJAY }";
@@ -1251,7 +1256,7 @@ TEST( AiaMicrophoneManagerTests, OpenMicrophoneWithInitiatorEchoedBack )
         strlen( openMicrophonePayload ), 0, 0 );
 
     TEST_ASSERT_TRUE( AiaMicrophoneManager_HoldToTalkStart(
-        microphoneManager, TEST_INDEX_START ) );
+        microphoneManager, BUFFER_START_INDEX ) );
     TEST_ASSERT_TRUE(
         AiaSemaphore( TryWait )( &testObserver->currentStateChanged ) );
     TEST_ASSERT_EQUAL( testObserver->currentState, AIA_MICROPHONE_STATE_OPEN );

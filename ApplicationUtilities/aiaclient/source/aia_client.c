@@ -778,7 +778,7 @@ bool AiaClient_AdjustVolume( AiaClient_t* aiaClient, int8_t delta )
 #ifdef AIA_ENABLE_MICROPHONE
 
 bool AiaClient_HoldToTalkStart( AiaClient_t* aiaClient,
-                                AiaBinaryAudioStreamOffset_t index )
+                                AiaDataStreamIndex_t index )
 {
     AiaAssert( aiaClient );
     if( !aiaClient )
@@ -802,7 +802,7 @@ void AiaClient_CloseMicrophone( AiaClient_t* aiaClient )
 }
 
 bool AiaClient_TapToTalkStart( AiaClient_t* aiaClient,
-                               AiaBinaryAudioStreamOffset_t index,
+                               AiaDataStreamIndex_t index,
                                AiaMicrophoneProfile_t profile )
 {
     AiaAssert( aiaClient );
@@ -816,8 +816,8 @@ bool AiaClient_TapToTalkStart( AiaClient_t* aiaClient,
 }
 
 bool AiaClient_WakeWordStart( AiaClient_t* aiaClient,
-                              AiaBinaryAudioStreamOffset_t beginIndex,
-                              AiaBinaryAudioStreamOffset_t endIndex,
+                              AiaDataStreamIndex_t beginIndex,
+                              AiaDataStreamIndex_t endIndex,
                               AiaMicrophoneProfile_t profile,
                               const char* wakeWord )
 {

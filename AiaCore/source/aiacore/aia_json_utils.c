@@ -124,7 +124,7 @@ bool AiaJsonUtils_GetArrayElement( const char* jsonArray,
     while( ( size_t )( ++currentByte - jsonArray ) < jsonArrayLength )
     {
         /* Skip over leading whitespace. */
-        if( isspace( ( int ) ( *currentByte ) ) )
+        if( isspace( (int)( *currentByte ) ) )
         {
             continue;
         }
@@ -156,7 +156,7 @@ bool AiaJsonUtils_GetArrayElement( const char* jsonArray,
 
                 /* Strip any trailing whitespace. */
                 while( currentByte - *jsonValue > 1 &&
-                       isspace( ( int ) ( *( currentByte - 1 ) ) ) )
+                       isspace( (int)( *( currentByte - 1 ) ) ) )
                 {
                     --currentByte;
                 }

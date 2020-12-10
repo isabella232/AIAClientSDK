@@ -23,8 +23,7 @@ The SDK, by default, relies on [MbedTLS](https://github.com/ARMmbed/mbedtls) for
 [Unity](https://github.com/ThrowTheSwitch/Unity) is a cross-platform test framework and the unit tests in the SDK make use of it, along with a couple of extra modules that come bundled with it.
 
 ##### AWS IoT Device SDK for Embedded C
-AWS IoT Device SDK for Embedded C provides libraries used to connect to AWS IoT platform and AIA Client SDK relies on the `v4_beta_deprecated` [branch](https://github.com/aws/aws-iot-device-sdk-embedded-C/tree/v4_beta_deprecated) of it that brings together AWS IoT Device SDK Embedded C and Amazon FreeRTOS libraries. Libraries SDK heavily relies on are `libiotbase`, `libiotmqt
-t`, `libiotserializer` and `libawsiotcommon`.
+AWS IoT Device SDK for Embedded C provides libraries used to connect to AWS IoT platform and AIA Client SDK relies on the `v4_beta_deprecated` [branch](https://github.com/aws/aws-iot-device-sdk-embedded-C/tree/v4_beta_deprecated) of it that brings together AWS IoT Device SDK Embedded C and Amazon FreeRTOS libraries. Libraries SDK heavily relies on are `libiotbase`, `libiotmqtt`, `libiotserializer` and `libawsiotcommon`.
 
 ##### LibCurl
 [LibCurl](https://curl.haxx.se/libcurl/) is a client-side, portable file-transfer library; and SDK, by default, relies on it to perform HTTP(s) registration requests.

@@ -216,7 +216,7 @@ static const char* HELP_MESSAGE =
 "| Stop:                                                                  |\n"
 "|   Press '4' followed by Enter to initiate a stop button press.         |\n"
 "| Pause:                                                                 |\n"
-"|   Press '5' followed by Enter to initiate a play button press.         |\n"
+"|   Press '5' followed by Enter to initiate a pause button press.        |\n"
 "| Help:                                                                  |\n"
 "|   Press '?' followed by Enter to view a help screen.                   |\n"
 "+------------------------------------------------------------------------+";
@@ -930,8 +930,7 @@ void processCommand( char c, bool* exit, AiaSampleApp_t* sampleApp )
         case '2':
         case '3':
         case '4':
-        case '5':
-        {
+        case '5': {
             AiaButtonCommand_t indexToCommand[] = {
                 AIA_BUTTON_PLAY, AIA_BUTTON_NEXT, AIA_BUTTON_PREVIOUS,
                 AIA_BUTTON_STOP, AIA_BUTTON_PAUSE

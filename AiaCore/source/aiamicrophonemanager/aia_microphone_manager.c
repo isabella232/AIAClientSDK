@@ -123,8 +123,8 @@ struct AiaMicrophoneManager
  *
  * @param The @c AiaMicrophoneManager_t to act on.
  * @param profile The ASR profile associated with the interaction.
- * @param startSample The sample offset at which to begin streaming. For wake
- * word interactinos, this must include 500 milliseconds of preroll.
+ * @param startSample The sample index at which to begin streaming. For wake
+ * word interactions, this must include 500 milliseconds of preroll.
  * @param initiator A C-string containing the initiator object to send in the @c
  * MicrophoneOpened event.
  * @return @c true If the event began successfully or @c false otherwise.
@@ -132,7 +132,7 @@ struct AiaMicrophoneManager
  */
 static bool AiaMicrophoneManager_OpenMicrophoneLocked(
     AiaMicrophoneManager_t* microphoneManager, AiaMicrophoneProfile_t profile,
-    AiaBinaryAudioStreamOffset_t startSample, const char* initiator );
+    AiaDataStreamIndex_t startSample, const char* initiator );
 
 /**
  * Called by a @c AiaMicrophoneManager_t's @c openMicrophoneTimer when an @c
@@ -525,8 +525,8 @@ void AiaMicrophoneManager_CloseMicrophone(
 }
 
 bool AiaMicrophoneManager_TapToTalkStart(
-    AiaMicrophoneManager_t* microphoneManager,
-    AiaBinaryAudioStreamOffset_t index, AiaMicrophoneProfile_t profile )
+    AiaMicrophoneManager_t* microphoneManager, AiaDataStreamIndex_t index,
+    AiaMicrophoneProfile_t profile )
 {
     AiaAssert( microphoneManager );
     if( !microphoneManager )
@@ -579,8 +579,7 @@ bool AiaMicrophoneManager_TapToTalkStart(
 }
 
 bool AiaMicrophoneManager_HoldToTalkStart(
-    AiaMicrophoneManager_t* microphoneManager,
-    AiaBinaryAudioStreamOffset_t index )
+    AiaMicrophoneManager_t* microphoneManager, AiaDataStreamIndex_t index )
 {
     AiaAssert( microphoneManager );
     if( !microphoneManager )
@@ -661,9 +660,8 @@ bool AiaMicrophoneManager_HoldToTalkStart(
 }
 
 bool AiaMicrophoneManager_WakeWordStart(
-    AiaMicrophoneManager_t* microphoneManager,
-    AiaBinaryAudioStreamOffset_t beginIndex,
-    AiaBinaryAudioStreamOffset_t endIndex, AiaMicrophoneProfile_t profile,
+    AiaMicrophoneManager_t* microphoneManager, AiaDataStreamIndex_t beginIndex,
+    AiaDataStreamIndex_t endIndex, AiaMicrophoneProfile_t profile,
     const char* wakeWord )
 {
     AiaAssert( microphoneManager );
@@ -701,15 +699,24 @@ bool AiaMicrophoneManager_WakeWordStart(
     "}";
     /* clang-format on */
 
+    AiaMutex( Lock )( &microphoneManager->mutex );
+
+    AiaBinaryAudioStreamOffset_t wwStreamBeginOffset =
+        microphoneManager->currentMicrophoneState.lastOffsetSent +
+        ( AIA_MICROPHONE_WAKE_WORD_PREROLL_IN_SAMPLES *
+          AIA_MICROPHONE_BUFFER_WORD_SIZE );
+    AiaBinaryAudioStreamOffset_t wwStreamEndOffset =
+        wwStreamBeginOffset +
+        ( ( endIndex - beginIndex ) * AIA_MICROPHONE_BUFFER_WORD_SIZE );
     int numCharsRequired =
         snprintf( NULL, 0, WAKE_WORD_INITATOR_FORMAT,
                   AiaMicrophoneInitiatorType_ToString(
                       AIA_MICROPHONE_INITIATOR_TYPE_WAKEWORD ),
-                  wakeWord, beginIndex * AIA_MICROPHONE_BUFFER_WORD_SIZE,
-                  endIndex * AIA_MICROPHONE_BUFFER_WORD_SIZE );
+                  wakeWord, wwStreamBeginOffset, wwStreamEndOffset );
     if( numCharsRequired < 0 )
     {
         AiaLogError( "snprintf failed" );
+        AiaMutex( Unlock )( &microphoneManager->mutex );
         return false;
     }
 
@@ -718,14 +725,13 @@ bool AiaMicrophoneManager_WakeWordStart(
                   WAKE_WORD_INITATOR_FORMAT,
                   AiaMicrophoneInitiatorType_ToString(
                       AIA_MICROPHONE_INITIATOR_TYPE_WAKEWORD ),
-                  wakeWord, beginIndex * AIA_MICROPHONE_BUFFER_WORD_SIZE,
-                  endIndex * AIA_MICROPHONE_BUFFER_WORD_SIZE ) < 0 )
+                  wakeWord, wwStreamBeginOffset, wwStreamEndOffset ) < 0 )
     {
         AiaLogError( "snprintf failed" );
+        AiaMutex( Unlock )( &microphoneManager->mutex );
         return false;
     }
 
-    AiaMutex( Lock )( &microphoneManager->mutex );
     if( microphoneManager->currentMicrophoneState.isMicrophoneOpen )
     {
         AiaLogWarn( "Microphone already open" );
@@ -739,7 +745,7 @@ bool AiaMicrophoneManager_WakeWordStart(
         AiaMutex( Unlock )( &microphoneManager->mutex );
         return false;
     }
-    AiaBinaryAudioStreamOffset_t begin =
+    AiaDataStreamIndex_t begin =
         beginIndex - AIA_MICROPHONE_WAKE_WORD_PREROLL_IN_SAMPLES;
 
     if( !AiaMicrophoneManager_OpenMicrophoneLocked(
@@ -759,7 +765,7 @@ bool AiaMicrophoneManager_WakeWordStart(
 
 static bool AiaMicrophoneManager_OpenMicrophoneLocked(
     AiaMicrophoneManager_t* microphoneManager, AiaMicrophoneProfile_t profile,
-    AiaBinaryAudioStreamOffset_t startSample, const char* initiator )
+    AiaDataStreamIndex_t startSample, const char* initiator )
 {
     if( microphoneManager->currentMicrophoneState.isMicrophoneOpen )
     {
@@ -831,7 +837,7 @@ static bool AiaMicrophoneManager_OpenMicrophoneLocked(
 
     int numCharsRequired = snprintf(
         NULL, 0, formatPayload, AiaMicrophoneProfile_ToString( profile ),
-        startSample * AIA_MICROPHONE_BUFFER_WORD_SIZE, initiator );
+        microphoneManager->currentMicrophoneState.lastOffsetSent, initiator );
     if( numCharsRequired < 0 )
     {
         AiaLogError( "snprintf failed" );

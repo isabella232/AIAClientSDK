@@ -74,12 +74,12 @@ static size_t AiaSequencer_EmitBuffer( AiaSequencer_t* sequencer )
         {
             size_t messageSize = 0;
             AiaSequenceNumber_t nextSequenceNumber;
-            void* buf_font = AiaSequencerBuffer_Front( sequencer->buffer, &messageSize );
+            void* buf_font =
+                AiaSequencerBuffer_Front( sequencer->buffer, &messageSize );
 
             if( !sequencer->getSequenceNumberCb(
-                    &nextSequenceNumber,
-                    buf_font,
-                    messageSize, sequencer->getSequenceNumberUserData ) )
+                    &nextSequenceNumber, buf_font, messageSize,
+                    sequencer->getSequenceNumberUserData ) )
             {
                 AiaLogWarn( "Failed to get the sequence number." );
                 continue;
